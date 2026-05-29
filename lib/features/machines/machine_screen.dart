@@ -6,6 +6,7 @@ import 'package:lift/app/theme.dart';
 import 'package:lift/features/workout/widgets/log_set_sheet.dart';
 import 'package:lift/shared/models/machine.dart';
 import 'package:lift/shared/models/workout_set_entry.dart';
+import 'package:lift/shared/widgets/lift_island_header.dart';
 import 'package:lift/shared/widgets/surfaces.dart';
 
 class MachineScreen extends StatefulWidget {
@@ -84,41 +85,28 @@ class _MachineScreenState extends State<MachineScreen> {
     final machine = widget.machine;
     return Scaffold(
       backgroundColor: const Color(0xFFF8F8F8),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        surfaceTintColor: Colors.transparent,
-        titleSpacing: 0,
-        leading: IconButton(
-          icon: const PhosphorIcon(PhosphorIconsRegular.caretLeft, size: 24),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              machine.displayName,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            Text(
-              machine.machineCode,
-              style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            onPressed: () {},
-            icon: const PhosphorIcon(PhosphorIconsRegular.info, size: 22),
-          ),
-        ],
-      ),
       body: SafeArea(
-        top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
           child: Column(
             children: [
+              LiftIslandHeader(
+                title: machine.displayName,
+                subtitle: machine.machineCode,
+                leading: LiftIslandHeaderAction(
+                  onTap: () => Navigator.pop(context),
+                  child: const PhosphorIcon(
+                    PhosphorIconsRegular.caretLeft,
+                    size: 24,
+                    color: Colors.white,
+                  ),
+                ),
+                trailing: const LiftIslandHeaderIconAction(
+                  icon: PhosphorIconsRegular.info,
+                  iconSize: 22,
+                ),
+              ),
+              const SizedBox(height: 12),
               _MachineHero(machine: machine),
               const SizedBox(height: 12),
               SectionBoundary(

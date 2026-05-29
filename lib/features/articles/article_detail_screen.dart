@@ -2,11 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:lift/app/theme.dart';
 import 'package:lift/features/articles/article_editor_screen.dart';
 import 'package:lift/features/articles/articles_repository.dart';
+import 'package:lift/features/articles/widgets/article_body_view.dart';
 import 'package:lift/shared/models/article.dart';
+import 'package:lift/shared/widgets/lift_dialogs.dart';
+import 'package:lift/shared/widgets/lift_island_header.dart';
+import 'package:lift/shared/widgets/lift_menu_sheet.dart';
 import 'package:lift/shared/widgets/surfaces.dart';
 
 const String _kArticlePlaceholderImage =
     'https://blocks.astratic.com/img/general-img-landscape.png';
+
+enum _ArticleHeaderMenuAction { edit, archive }
 
 class ArticleDetailScreen extends StatefulWidget {
   const ArticleDetailScreen({
@@ -72,31 +78,72 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
   Future<void> _delete() async {
     final article = _article;
     if (article == null) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showLiftConfirmDialog(
       context: context,
-      builder:
-          (context) => AlertDialog(
-            title: const Text('Delete article?'),
-            content: const Text(
-              'This will archive the article and hide it from members.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Archive'),
-              ),
-            ],
-          ),
+      title: 'Delete article?',
+      message: 'This will archive the article and hide it from members.',
+      confirmLabel: 'Archive',
+      confirmColor: Colors.red.shade600,
     );
     if (confirmed != true) return;
     await widget.repository.deleteArticle(article);
     if (!mounted) return;
     Navigator.of(context).pop(true);
+  }
+
+  Future<void> _showHeaderActions() async {
+    final action = await showModalBottomSheet<_ArticleHeaderMenuAction>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.24),
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          bottom: false,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              12,
+              0,
+              12,
+              10 + MediaQuery.paddingOf(sheetContext).bottom,
+            ),
+            child: LiftMenuSheet(
+              title: 'Article options',
+              subtitle: _article?.title,
+              children: [
+                LiftMenuActionTile(
+                  icon: const Icon(Icons.edit_outlined),
+                  title: 'Edit article',
+                  onTap:
+                      () => Navigator.of(
+                        sheetContext,
+                      ).pop(_ArticleHeaderMenuAction.edit),
+                ),
+                const SizedBox(height: 8),
+                LiftMenuActionTile(
+                  icon: const Icon(Icons.delete_outline),
+                  title: 'Archive article',
+                  accent: Colors.red.shade600,
+                  onTap:
+                      () => Navigator.of(
+                        sheetContext,
+                      ).pop(_ArticleHeaderMenuAction.archive),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (action == null || !mounted) return;
+    switch (action) {
+      case _ArticleHeaderMenuAction.edit:
+        await _edit();
+        break;
+      case _ArticleHeaderMenuAction.archive:
+        await _delete();
+        break;
+    }
   }
 
   Widget _chip(String value) {
@@ -128,8 +175,28 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     }
     if (article == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Article')),
-        body: const Center(child: Text('Article not found')),
+        backgroundColor: const Color(0xFFF7F7F8),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+            child: Column(
+              children: [
+                LiftIslandHeader(
+                  title: 'ARTICLE',
+                  leading: LiftIslandHeaderAction(
+                    onTap: () => Navigator.of(context).pop(),
+                    child: const Icon(
+                      Icons.arrow_back_ios_new_rounded,
+                      color: Colors.white,
+                      size: 22,
+                    ),
+                  ),
+                ),
+                const Expanded(child: Center(child: Text('Article not found'))),
+              ],
+            ),
+          ),
+        ),
       );
     }
     final author = _authors[article.authorId];
@@ -137,169 +204,196 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     final publishedLabel = _dateLabel(article.publishedAt);
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F8),
-      appBar: AppBar(
-        title: const Text('Article'),
-        actions: [
-          if (canEdit) ...[
-            IconButton(onPressed: _edit, icon: const Icon(Icons.edit_outlined)),
-            IconButton(
-              onPressed: _delete,
-              icon: const Icon(Icons.delete_outline),
-            ),
-          ],
-        ],
-      ),
       body: SafeArea(
-        top: false,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(18),
-                child: AspectRatio(
-                  aspectRatio: 16 / 9,
-                  child: Image.network(
-                    article.imageUrl ?? _kArticlePlaceholderImage,
-                    fit: BoxFit.cover,
-                    errorBuilder:
-                        (_, __, ___) => Container(
-                          color: Colors.grey.shade300,
-                          alignment: Alignment.center,
-                          child: const Icon(Icons.image_outlined),
-                        ),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              child: LiftIslandHeader(
+                title: 'ARTICLE',
+                leading: LiftIslandHeaderAction(
+                  onTap: () => Navigator.of(context).pop(),
+                  child: const Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    color: Colors.white,
+                    size: 22,
                   ),
                 ),
+                trailing:
+                    canEdit
+                        ? LiftIslandHeaderAction(
+                          onTap: _showHeaderActions,
+                          child: const Icon(
+                            Icons.more_vert_rounded,
+                            color: Colors.white,
+                            size: 22,
+                          ),
+                        )
+                        : null,
               ),
-              const SizedBox(height: 12),
-              Text(
-                article.title,
-                style: const TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                article.summary,
-                style: TextStyle(
-                  color: Colors.grey.shade700,
-                  height: 1.35,
-                  fontSize: 15,
-                ),
-              ),
-              const SizedBox(height: 12),
-              SectionBoundary(
-                borderRadius: 14,
-                padding: const EdgeInsets.all(12),
-                child: Row(
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    CircleAvatar(
-                      radius: 20,
-                      backgroundColor: kAccentColor.withValues(alpha: 0.14),
-                      child: Text(
-                        (author?.name ?? 'Lift').substring(0, 1).toUpperCase(),
-                        style: const TextStyle(
-                          color: kAccentColor,
-                          fontWeight: FontWeight.w700,
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(18),
+                      child: AspectRatio(
+                        aspectRatio: 16 / 9,
+                        child: Image.network(
+                          article.imageUrl ?? _kArticlePlaceholderImage,
+                          fit: BoxFit.cover,
+                          errorBuilder:
+                              (_, __, ___) => Container(
+                                color: Colors.grey.shade300,
+                                alignment: Alignment.center,
+                                child: const Icon(Icons.image_outlined),
+                              ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                    const SizedBox(height: 12),
+                    Text(
+                      article.title,
+                      style: const TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      article.summary,
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        height: 1.35,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SectionBoundary(
+                      borderRadius: 14,
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
                         children: [
-                          Text(
-                            author?.name ?? 'LIFT',
-                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          CircleAvatar(
+                            radius: 20,
+                            backgroundColor: kAccentColor.withValues(
+                              alpha: 0.14,
+                            ),
+                            child: Text(
+                              (author?.name ?? 'Lift')
+                                  .substring(0, 1)
+                                  .toUpperCase(),
+                              style: const TextStyle(
+                                color: kAccentColor,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           ),
-                          Text(
-                            '${author?.roleLabel ?? 'Coach'} • $publishedLabel',
-                            style: TextStyle(color: Colors.grey.shade700),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  author?.name ?? 'LIFT',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                Text(
+                                  '${author?.roleLabel ?? 'Coach'} • $publishedLabel',
+                                  style: TextStyle(color: Colors.grey.shade700),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () {
+                              setState(() => _bookmarked = !_bookmarked);
+                            },
+                            icon: Icon(
+                              _bookmarked
+                                  ? Icons.bookmark
+                                  : Icons.bookmark_outline,
+                              color: kAccentColor,
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Share coming soon'),
+                                ),
+                              );
+                            },
+                            icon: const Icon(
+                              Icons.share_outlined,
+                              color: kAccentColor,
+                            ),
                           ),
                         ],
                       ),
                     ),
-                    IconButton(
-                      onPressed: () {
-                        setState(() => _bookmarked = !_bookmarked);
-                      },
-                      icon: Icon(
-                        _bookmarked ? Icons.bookmark : Icons.bookmark_outline,
-                        color: kAccentColor,
-                      ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        ...article.tags.map(_chip),
+                        ...article.categories.map(_chip),
+                      ],
                     ),
-                    IconButton(
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Share coming soon')),
-                        );
-                      },
-                      icon: const Icon(
-                        Icons.share_outlined,
-                        color: kAccentColor,
-                      ),
+                    const SizedBox(height: 14),
+                    SectionBoundary(
+                      borderRadius: 16,
+                      padding: const EdgeInsets.all(14),
+                      child: ArticleBodyView(content: article.content),
                     ),
+                    if (article.machineIds.isNotEmpty ||
+                        article.muscleGroups.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: SectionBoundary(
+                          borderRadius: 16,
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Related',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 15,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              if (article.machineIds.isNotEmpty)
+                                Text(
+                                  'Machines: ${article.machineIds.join(', ')}',
+                                  style: TextStyle(color: Colors.grey.shade700),
+                                ),
+                              if (article.muscleGroups.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text(
+                                    'Muscles: ${article.muscleGroups.join(', ')}',
+                                    style: TextStyle(
+                                      color: Colors.grey.shade700,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  ...article.tags.map(_chip),
-                  ...article.categories.map(_chip),
-                ],
-              ),
-              const SizedBox(height: 14),
-              SectionBoundary(
-                borderRadius: 16,
-                padding: const EdgeInsets.all(14),
-                child: Text(
-                  article.content,
-                  style: const TextStyle(fontSize: 16, height: 1.55),
-                ),
-              ),
-              if (article.machineIds.isNotEmpty ||
-                  article.muscleGroups.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: SectionBoundary(
-                    borderRadius: 16,
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Related',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 15,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        if (article.machineIds.isNotEmpty)
-                          Text(
-                            'Machines: ${article.machineIds.join(', ')}',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                        if (article.muscleGroups.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Text(
-                              'Muscles: ${article.muscleGroups.join(', ')}',
-                              style: TextStyle(color: Colors.grey.shade700),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

@@ -6,6 +6,10 @@ import 'package:lift/features/articles/article_detail_screen.dart';
 import 'package:lift/features/articles/article_editor_screen.dart';
 import 'package:lift/features/articles/articles_repository.dart';
 import 'package:lift/shared/models/article.dart';
+import 'package:lift/shared/widgets/lift_action_button.dart';
+import 'package:lift/shared/widgets/lift_dialogs.dart';
+import 'package:lift/shared/widgets/lift_island_header.dart';
+import 'package:lift/shared/widgets/lift_menu_sheet.dart';
 import 'package:lift/shared/widgets/surfaces.dart';
 
 const String _kArticlePlaceholderImage =
@@ -191,24 +195,12 @@ class _ArticlesScreenState extends State<ArticlesScreen> {
   }
 
   Future<void> _deleteFromList(Article article) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showLiftConfirmDialog(
       context: context,
-      builder:
-          (context) => AlertDialog(
-            title: const Text('Archive article?'),
-            content: const Text('This removes the article from member views.'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Archive'),
-              ),
-            ],
-          ),
+      title: 'Archive article?',
+      message: 'This removes the article from member views.',
+      confirmLabel: 'Archive',
+      confirmColor: Colors.red.shade600,
     );
     if (confirmed != true) return;
     await _repository.deleteArticle(article);
@@ -308,10 +300,8 @@ class _ArticlesScreenState extends State<ArticlesScreen> {
     final result = await showModalBottomSheet<_AdvancedFilterResult>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.24),
       builder: (context) {
         var tempTags = Set<String>.from(_tagFilters);
         var tempAuthors = Set<String>.from(_authorFilters);
@@ -326,44 +316,26 @@ class _ArticlesScreenState extends State<ArticlesScreen> {
           required ValueChanged<Set<String>> onChanged,
           String Function(String value)? labelBuilder,
         }) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: options
-                      .map((option) {
-                        final label = labelBuilder?.call(option) ?? option;
-                        final isSelected = selected.contains(option);
-                        return FilterChip(
-                          label: Text(label),
-                          selected: isSelected,
-                          onSelected: (value) {
-                            final next = Set<String>.from(selected);
-                            if (value) {
-                              next.add(option);
-                            } else {
-                              next.remove(option);
-                            }
-                            onChanged(next);
-                          },
-                        );
-                      })
-                      .toList(growable: false),
-                ),
-              ],
-            ),
+          return _SheetFilterSection(
+            title: title,
+            children:
+                options.map((option) {
+                  final label = labelBuilder?.call(option) ?? option;
+                  final isSelected = selected.contains(option);
+                  return _SheetChoiceChip(
+                    label: label,
+                    selected: isSelected,
+                    onTap: () {
+                      final next = Set<String>.from(selected);
+                      if (isSelected) {
+                        next.remove(option);
+                      } else {
+                        next.add(option);
+                      }
+                      onChanged(next);
+                    },
+                  );
+                }).toList(growable: false),
           );
         }
 
@@ -373,35 +345,19 @@ class _ArticlesScreenState extends State<ArticlesScreen> {
               top: false,
               child: Padding(
                 padding: EdgeInsets.fromLTRB(
-                  16,
                   12,
-                  16,
-                  16 + MediaQuery.of(context).viewInsets.bottom,
+                  0,
+                  12,
+                  10 +
+                      MediaQuery.of(context).padding.bottom +
+                      MediaQuery.of(context).viewInsets.bottom,
                 ),
                 child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
+                  child: LiftMenuSheet(
+                    title: 'Article filters',
+                    subtitle:
+                        'Refine tags, coaches, machines, muscle groups, and categories.',
                     children: [
-                      Container(
-                        width: 46,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      const Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          'Article filters',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 18,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
                       chipGroup(
                         title: 'Tags',
                         options: _filterOptions.tags,
@@ -445,11 +401,13 @@ class _ArticlesScreenState extends State<ArticlesScreen> {
                             (next) =>
                                 setStateModal(() => tempCategories = next),
                       ),
+                      const SizedBox(height: 6),
                       Row(
                         children: [
                           Expanded(
-                            child: OutlinedButton(
-                              onPressed: () {
+                            child: LiftActionButton(
+                              label: 'Clear',
+                              onTap: () {
                                 Navigator.pop(
                                   context,
                                   const _AdvancedFilterResult(
@@ -461,16 +419,13 @@ class _ArticlesScreenState extends State<ArticlesScreen> {
                                   ),
                                 );
                               },
-                              child: const Text('Clear'),
                             ),
                           ),
                           const SizedBox(width: 10),
                           Expanded(
-                            child: FilledButton(
-                              style: FilledButton.styleFrom(
-                                backgroundColor: kAccentColor,
-                              ),
-                              onPressed: () {
+                            child: LiftActionButton(
+                              label: 'Apply',
+                              onTap: () {
                                 Navigator.pop(
                                   context,
                                   _AdvancedFilterResult(
@@ -482,7 +437,6 @@ class _ArticlesScreenState extends State<ArticlesScreen> {
                                   ),
                                 );
                               },
-                              child: const Text('Apply'),
                             ),
                           ),
                         ],
@@ -515,10 +469,8 @@ class _ArticlesScreenState extends State<ArticlesScreen> {
   }) {
     return showModalBottomSheet<Set<String>>(
       context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.24),
       builder: (context) {
         var selected = Set<String>.from(initialSelected);
         return StatefulBuilder(
@@ -526,72 +478,54 @@ class _ArticlesScreenState extends State<ArticlesScreen> {
             return SafeArea(
               top: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                padding: EdgeInsets.fromLTRB(
+                  12,
+                  0,
+                  12,
+                  10 + MediaQuery.of(context).padding.bottom,
+                ),
+                child: LiftMenuSheet(
+                  title: title,
+                  subtitle: 'Select one or more options.',
                   children: [
-                    Container(
-                      width: 46,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(999),
+                    SingleChildScrollView(
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: options
+                            .map((option) {
+                              final label = displayLabel?.call(option) ?? option;
+                              return _SheetChoiceChip(
+                                label: label,
+                                selected: selected.contains(option),
+                                onTap: () {
+                                  setStateModal(() {
+                                    if (selected.contains(option)) {
+                                      selected.remove(option);
+                                    } else {
+                                      selected.add(option);
+                                    }
+                                  });
+                                },
+                              );
+                            })
+                            .toList(growable: false),
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 18,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Flexible(
-                      child: SingleChildScrollView(
-                        child: Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: options
-                              .map((option) {
-                                final label =
-                                    displayLabel?.call(option) ?? option;
-                                return FilterChip(
-                                  label: Text(label),
-                                  selected: selected.contains(option),
-                                  onSelected: (value) {
-                                    setStateModal(() {
-                                      if (value) {
-                                        selected.add(option);
-                                      } else {
-                                        selected.remove(option);
-                                      }
-                                    });
-                                  },
-                                );
-                              })
-                              .toList(growable: false),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
                     Row(
                       children: [
                         Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => Navigator.pop(context, <String>{}),
-                            child: const Text('Clear'),
+                          child: LiftActionButton(
+                            label: 'Clear',
+                            onTap: () => Navigator.pop(context, <String>{}),
                           ),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
-                          child: FilledButton(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: kAccentColor,
-                            ),
-                            onPressed: () => Navigator.pop(context, selected),
-                            child: const Text('Apply'),
+                          child: LiftActionButton(
+                            label: 'Apply',
+                            onTap: () => Navigator.pop(context, selected),
                           ),
                         ),
                       ],
@@ -650,38 +584,18 @@ class _ArticlesScreenState extends State<ArticlesScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'Learn',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
-                  ),
-                ),
-                if (_repository.canCreate)
-                  InkWell(
-                    borderRadius: BorderRadius.circular(999),
-                    onTap: _openCreate,
-                    child: Ink(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: kAccentColor.withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: kAccentColor.withValues(alpha: 0.22),
-                        ),
-                      ),
-                      child: const Icon(
-                        Icons.add_rounded,
-                        size: 22,
-                        color: kAccentColor,
-                      ),
-                    ),
-                  ),
-              ],
+            LiftIslandHeader(
+              title: 'Learn',
+              trailing:
+                  _repository.canCreate
+                      ? LiftIslandHeaderIconAction(
+                        icon: Icons.add_rounded,
+                        iconSize: 24,
+                        onTap: _openCreate,
+                      )
+                      : null,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             SectionBoundary(
               borderRadius: 16,
               padding: const EdgeInsets.all(10),
@@ -938,6 +852,96 @@ class _SortChip extends StatelessWidget {
   }
 }
 
+class _SheetFilterSection extends StatelessWidget {
+  const _SheetFilterSection({
+    required this.title,
+    required this.children,
+  });
+
+  final String title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              color: Color(0xFF171717),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: children,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SheetChoiceChip extends StatelessWidget {
+  const _SheetChoiceChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final background =
+        selected
+            ? kAccentColor.withValues(alpha: 0.14)
+            : Colors.white.withValues(alpha: 0.78);
+    final borderColor =
+        selected
+            ? kAccentColor.withValues(alpha: 0.38)
+            : kAccentColor.withValues(alpha: 0.18);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          decoration: BoxDecoration(
+            color: background,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: borderColor),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.025),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? kAccentColor : const Color(0xFF5B4B42),
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ArticleCard extends StatelessWidget {
   const _ArticleCard({
     required this.article,
@@ -956,6 +960,48 @@ class _ArticleCard extends StatelessWidget {
   final VoidCallback onOpen;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
+
+  Future<void> _showActions(BuildContext context) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.24),
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          bottom: false,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              12,
+              0,
+              12,
+              10 + MediaQuery.paddingOf(sheetContext).bottom,
+            ),
+            child: LiftMenuSheet(
+              title: 'Article options',
+              subtitle: article.title,
+              children: [
+                LiftMenuActionTile(
+                  icon: const Icon(Icons.edit_outlined),
+                  title: 'Edit article',
+                  onTap: () => Navigator.pop(sheetContext, 'edit'),
+                ),
+                const SizedBox(height: 8),
+                LiftMenuActionTile(
+                  icon: const Icon(Icons.delete_outline),
+                  title: 'Archive article',
+                  accent: Colors.red.shade600,
+                  onTap: () => Navigator.pop(sheetContext, 'archive'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (action == 'edit') onEdit?.call();
+    if (action == 'archive') onDelete?.call();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -981,9 +1027,19 @@ class _ArticleCard extends StatelessWidget {
                     fit: BoxFit.cover,
                     errorBuilder:
                         (_, __, ___) => Container(
-                          color: Colors.grey.shade300,
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [kAccentDark, kAccentMid, kAccentLight],
+                            ),
+                          ),
                           alignment: Alignment.center,
-                          child: const Icon(Icons.image_outlined),
+                          child: Icon(
+                            Icons.image_outlined,
+                            color: Colors.white.withValues(alpha: 0.9),
+                            size: 42,
+                          ),
                         ),
                   ),
                 ),
@@ -1006,23 +1062,27 @@ class _ArticleCard extends StatelessWidget {
                           ),
                         ),
                         if (canEdit)
-                          PopupMenuButton<String>(
-                            onSelected: (value) {
-                              if (value == 'edit') onEdit?.call();
-                              if (value == 'delete') onDelete?.call();
-                            },
-                            itemBuilder:
-                                (context) => [
-                                  const PopupMenuItem(
-                                    value: 'edit',
-                                    child: Text('Edit'),
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: () => _showActions(context),
+                              borderRadius: BorderRadius.circular(14),
+                              child: Ink(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(14),
+                                  color: kAccentColor.withValues(alpha: 0.06),
+                                  border: Border.all(
+                                    color: kAccentColor.withValues(alpha: 0.16),
                                   ),
-                                  const PopupMenuItem(
-                                    value: 'delete',
-                                    child: Text('Archive'),
-                                  ),
-                                ],
-                            icon: const Icon(Icons.more_horiz_rounded),
+                                ),
+                                child: const Icon(
+                                  Icons.more_horiz_rounded,
+                                  color: kAccentColor,
+                                ),
+                              ),
+                            ),
                           ),
                       ],
                     ),

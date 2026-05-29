@@ -8,9 +8,26 @@ import 'package:lift/features/workout/live_workout_screen.dart';
 import 'package:lift/features/workout/mock_workout_templates.dart';
 import 'package:lift/shared/models/workout_history_entry.dart';
 import 'package:lift/shared/models/workout_template.dart';
+import 'package:lift/shared/widgets/lift_island_header.dart';
 import 'package:lift/shared/widgets/surfaces.dart';
 
 enum _WorkoutTemplatesMode { overview, list, detail, editor, live }
+
+enum _TemplateDetailMenuAction { edit, delete }
+
+enum WorkoutFlowRouteTarget { list, detail, editor, live }
+
+class WorkoutFlowCommand {
+  const WorkoutFlowCommand({
+    required this.id,
+    required this.target,
+    this.templateId,
+  });
+
+  final String id;
+  final WorkoutFlowRouteTarget target;
+  final String? templateId;
+}
 
 enum _SwapExerciseEquipment { machine, barbell, dumbbell, cables, bodyweight }
 
@@ -83,6 +100,12 @@ const List<_SwapExerciseCatalogItem> _kSwapExerciseCatalog = [
     keywords: ['lunge', 'dumbbell', 'leg'],
   ),
   _SwapExerciseCatalogItem(
+    name: 'Standing Calf Raise',
+    muscleGroups: ['Calves'],
+    equipment: _SwapExerciseEquipment.machine,
+    keywords: ['calf', 'raise', 'standing', 'lower leg'],
+  ),
+  _SwapExerciseCatalogItem(
     name: 'Lat Pulldown',
     muscleGroups: ['Back', 'Biceps'],
     equipment: _SwapExerciseEquipment.cables,
@@ -105,6 +128,12 @@ const List<_SwapExerciseCatalogItem> _kSwapExerciseCatalog = [
     muscleGroups: ['Back', 'Biceps'],
     equipment: _SwapExerciseEquipment.bodyweight,
     keywords: ['pull', 'up', 'back'],
+  ),
+  _SwapExerciseCatalogItem(
+    name: 'Wrist Curl',
+    muscleGroups: ['Forearms'],
+    equipment: _SwapExerciseEquipment.dumbbell,
+    keywords: ['wrist', 'curl', 'forearm', 'grip'],
   ),
   _SwapExerciseCatalogItem(
     name: 'Chest Press',
@@ -187,27 +216,26 @@ class WorkoutTemplatesFlow extends StatefulWidget {
     this.onLiveFullscreenChanged,
     this.onWorkoutCompleted,
     this.onHideShellNavChanged,
+    this.externalCommand,
+    this.onExternalCommandHandled,
   });
 
   final ValueChanged<WorkoutLiveDockHandle?>? onLiveDockChanged;
   final ValueChanged<WorkoutLiveFullscreenHandle?>? onLiveFullscreenChanged;
   final ValueChanged<WorkoutHistoryEntry>? onWorkoutCompleted;
   final ValueChanged<bool>? onHideShellNavChanged;
+  final WorkoutFlowCommand? externalCommand;
+  final ValueChanged<String>? onExternalCommandHandled;
 
   @override
   State<WorkoutTemplatesFlow> createState() => _WorkoutTemplatesFlowState();
 }
 
 class WorkoutLiveDockHandle {
-  const WorkoutLiveDockHandle({
-    required this.state,
-    required this.onResume,
-    required this.onClose,
-  });
+  const WorkoutLiveDockHandle({required this.state, required this.onResume});
 
   final LiveWorkoutMiniState state;
   final VoidCallback onResume;
-  final VoidCallback onClose;
 }
 
 class WorkoutLiveFullscreenHandle {
@@ -238,14 +266,28 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
   bool _isCompletingLiveWorkout = false;
   bool _isDiscardingLiveWorkout = false;
   bool? _lastPublishedHideShellNav;
+  String? _lastHandledExternalCommandId;
+  LiveWorkoutScreen? _liveWorkoutView;
+  String? _liveWorkoutTemplateId;
 
   @override
   void initState() {
     super.initState();
-    _templates = MockWorkoutTemplates.seed();
+    _templates = List<WorkoutTemplate>.from(MockWorkoutTemplates.seed());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _applyExternalCommand(widget.externalCommand);
       _publishShellNavVisibility();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant WorkoutTemplatesFlow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.externalCommand?.id == oldWidget.externalCommand?.id) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _applyExternalCommand(widget.externalCommand);
     });
   }
 
@@ -272,6 +314,53 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
     return null;
   }
 
+  WorkoutTemplate? _templateById(String? templateId) {
+    if (templateId == null || templateId.trim().isEmpty) return null;
+    for (final template in _templates) {
+      if (template.id == templateId) return template;
+    }
+    return null;
+  }
+
+  void _applyExternalCommand(WorkoutFlowCommand? command) {
+    if (command == null) return;
+    if (_lastHandledExternalCommandId == command.id) return;
+    _lastHandledExternalCommandId = command.id;
+
+    final targetTemplate = _templateById(command.templateId);
+    switch (command.target) {
+      case WorkoutFlowRouteTarget.list:
+        _openList();
+        break;
+      case WorkoutFlowRouteTarget.detail:
+        if (targetTemplate != null) {
+          _openDetail(targetTemplate);
+        } else {
+          _openList();
+        }
+        break;
+      case WorkoutFlowRouteTarget.editor:
+        if (targetTemplate != null) {
+          _openEdit(targetTemplate);
+        } else {
+          _openCreate();
+        }
+        break;
+      case WorkoutFlowRouteTarget.live:
+        if (targetTemplate != null &&
+            _hasActiveLiveWorkout &&
+            _activeLiveTemplate?.id == targetTemplate.id) {
+          _resumeLiveWorkout();
+        } else if (targetTemplate != null) {
+          _openLiveWorkout(targetTemplate);
+        } else {
+          _openList();
+        }
+        break;
+    }
+    widget.onExternalCommandHandled?.call(command.id);
+  }
+
   bool get _hasActiveLiveWorkout => _activeLiveTemplate != null;
 
   bool get _showLiveDock =>
@@ -290,7 +379,6 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
         WorkoutLiveDockHandle(
           state: _liveMiniState!,
           onResume: _resumeLiveWorkout,
-          onClose: _closeLiveWorkoutFromDock,
         ),
       );
       return;
@@ -320,7 +408,9 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
   }
 
   bool get _shouldHideShellNav =>
-      !_hasActiveLiveWorkout && _mode == _WorkoutTemplatesMode.detail;
+      _mode == _WorkoutTemplatesMode.detail ||
+      _mode == _WorkoutTemplatesMode.editor ||
+      _mode == _WorkoutTemplatesMode.live;
 
   void _publishShellNavVisibility() {
     final shouldHide = _shouldHideShellNav;
@@ -491,6 +581,120 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
     return confirmed == true;
   }
 
+  Future<void> _deleteTemplate(WorkoutTemplate template) async {
+    final isDeletingLiveTemplate = _activeLiveTemplate?.id == template.id;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete workout template?'),
+          content: Text(
+            isDeletingLiveTemplate
+                ? 'This will delete "${template.name}" and end its live workout session.'
+                : 'This will delete "${template.name}" from your templates.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.red.shade600,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _templates.removeWhere((value) => value.id == template.id);
+      _expandedExerciseIds.clear();
+      if (_activeLiveTemplate?.id == template.id) {
+        _clearLiveWorkoutSession();
+      }
+      if (_selectedTemplateId == template.id) {
+        _selectedTemplateId = null;
+      }
+      _mode =
+          _templates.isEmpty
+              ? _WorkoutTemplatesMode.overview
+              : _WorkoutTemplatesMode.list;
+    });
+    _publishLiveShellState();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Deleted "${template.name}"')));
+  }
+
+  Future<void> _showTemplateOptionsSheet(WorkoutTemplate template) async {
+    final action = await showModalBottomSheet<_TemplateDetailMenuAction>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.18),
+      isScrollControlled: false,
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          bottom: false,
+          child: GlassContainer(
+            borderRadius: 24,
+            blur: 18,
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 42,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade400,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _TemplateActionRow(
+                  icon: PhosphorIconsRegular.pencilSimple,
+                  label: 'Edit workout',
+                  onTap: () {
+                    Navigator.of(
+                      sheetContext,
+                    ).pop(_TemplateDetailMenuAction.edit);
+                  },
+                ),
+                const SizedBox(height: 8),
+                _TemplateActionRow(
+                  icon: PhosphorIconsRegular.trash,
+                  label: 'Delete workout',
+                  foregroundColor: Colors.red.shade600,
+                  onTap: () {
+                    Navigator.of(
+                      sheetContext,
+                    ).pop(_TemplateDetailMenuAction.delete);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case _TemplateDetailMenuAction.edit:
+        _openEdit(template);
+      case _TemplateDetailMenuAction.delete:
+        _deleteTemplate(template);
+    }
+  }
+
   void _openOverview() {
     setState(() => _mode = _WorkoutTemplatesMode.overview);
     _publishLiveShellState();
@@ -531,12 +735,14 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
     setState(() {
       _selectedTemplateId = template.id;
       _activeLiveTemplate = template;
-      _liveReturnMode = _WorkoutTemplatesMode.overview;
+      _liveReturnMode = _WorkoutTemplatesMode.detail;
       _liveMiniState = null;
       _liveSessionSeed += 1;
       _liveSessionKey = ValueKey(
         'live_session_${template.id}_$_liveSessionSeed',
       );
+      _liveWorkoutView = null;
+      _liveWorkoutTemplateId = null;
       _mode = _WorkoutTemplatesMode.live;
     });
     _publishLiveShellState();
@@ -544,8 +750,12 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
 
   void _minimizeLiveWorkout() {
     if (!_hasActiveLiveWorkout) return;
+    final activeTemplate = _activeLiveTemplate;
     setState(() {
-      _mode = _WorkoutTemplatesMode.overview;
+      if (activeTemplate != null) {
+        _selectedTemplateId = activeTemplate.id;
+      }
+      _mode = _WorkoutTemplatesMode.detail;
     });
     _publishLiveShellState();
   }
@@ -558,19 +768,13 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
     _publishLiveShellState();
   }
 
-  void _closeLiveWorkoutFromDock() {
-    if (!_hasActiveLiveWorkout) return;
-    setState(() {
-      _clearLiveWorkoutSession();
-    });
-    _publishLiveShellState();
-  }
-
   void _clearLiveWorkoutSession() {
     _activeLiveTemplate = null;
     _liveMiniState = null;
     _liveSummaryState = null;
     _liveSessionKey = null;
+    _liveWorkoutView = null;
+    _liveWorkoutTemplateId = null;
   }
 
   String _formatSummaryDuration(Duration duration) {
@@ -831,9 +1035,12 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
         !_showLiveDock;
     final detailTemplate =
         contentMode == _WorkoutTemplatesMode.detail ? _selectedTemplate : null;
-    final bottomPadding =
-        (contentMode == _WorkoutTemplatesMode.detail ? 24.0 : 104.0) +
-        (_showLiveDock ? 96.0 : 0.0);
+    final baseBottomPadding = switch (contentMode) {
+      _WorkoutTemplatesMode.overview || _WorkoutTemplatesMode.list => 104.0,
+      _WorkoutTemplatesMode.detail => 24.0,
+      _WorkoutTemplatesMode.editor || _WorkoutTemplatesMode.live => 14.0,
+    };
+    final bottomPadding = baseBottomPadding + (_showLiveDock ? 96.0 : 0.0);
     final contentPadding = EdgeInsets.fromLTRB(16, 14, 16, bottomPadding);
 
     return SafeArea(
@@ -915,19 +1122,9 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
       children: [
         _TemplatesHeader(
           title: 'Templates',
-          rightWidget: TextButton(
-            onPressed: _openList,
-            style: TextButton.styleFrom(
-              foregroundColor: kAccentColor,
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            child: const Text(
-              'VIEW ALL',
-              softWrap: false,
-              overflow: TextOverflow.fade,
-            ),
+          rightWidget: LiftIslandHeaderIconAction(
+            icon: PhosphorIconsRegular.listBullets,
+            onTap: _openList,
           ),
         ),
         const SizedBox(height: 14),
@@ -1013,11 +1210,12 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
           title: 'Templates',
           showBack: true,
           onBack: _handleBack,
-          rightWidget: IconButton(
-            onPressed: () {},
-            icon: const PhosphorIcon(
-              PhosphorIconsRegular.userCircle,
-              color: kAccentColor,
+          rightWidget: LiftIslandHeaderAction(
+            onTap: () {},
+            child: const PhosphorIcon(
+              PhosphorIconsRegular.dotsThreeOutlineVertical,
+              size: 22,
+              color: Colors.white,
             ),
           ),
         ),
@@ -1126,16 +1324,16 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
     return Column(
       children: [
         _TemplatesHeader(
-          title: 'Templates',
+          title: template.name,
           showBack: true,
           onBack: _handleBack,
-          rightWidget: IconButton(
-            onPressed: () => _openEdit(template),
-            icon: const PhosphorIcon(
-              PhosphorIconsRegular.pencilSimple,
-              color: kAccentColor,
+          rightWidget: LiftIslandHeaderAction(
+            onTap: () => _showTemplateOptionsSheet(template),
+            child: const PhosphorIcon(
+              PhosphorIconsRegular.dotsThreeOutlineVertical,
+              size: 22,
+              color: Colors.white,
             ),
-            tooltip: 'Edit template',
           ),
         ),
         const SizedBox(height: 10),
@@ -1189,7 +1387,6 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
 
   Widget _buildEditor() {
     final initialTemplate = _selectedTemplate ?? _createEmptyTemplate();
-    final isEditingExisting = _templates.any((t) => t.id == initialTemplate.id);
 
     return _TemplateEditorScreen(
       template: initialTemplate,
@@ -1197,7 +1394,29 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
       nextExerciseId: _nextExerciseId,
       onBack: _handleBack,
       onSave: _saveTemplate,
-      title: isEditingExisting ? 'Edit Template' : 'New Template',
+      title: initialTemplate.name,
+    );
+  }
+
+  LiveWorkoutScreen _createLiveWorkoutView(WorkoutTemplate template) {
+    return LiveWorkoutScreen(
+      key: _liveSessionKey,
+      template: template,
+      onBack: _minimizeLiveWorkout,
+      onDiscard: _discardLiveWorkout,
+      onCompleteWorkout: _completeLiveWorkout,
+      showBottomActions: false,
+      onStateChanged: (state) {
+        if (!mounted) return;
+        setState(() {
+          _liveMiniState = state;
+        });
+        _publishLiveShellState();
+      },
+      onSummaryChanged: (summary) {
+        if (!mounted) return;
+        _liveSummaryState = summary;
+      },
     );
   }
 
@@ -1219,39 +1438,19 @@ class _WorkoutTemplatesFlowState extends State<WorkoutTemplatesFlow> {
       );
     }
 
-    return LiveWorkoutScreen(
-      key: _liveSessionKey,
-      template: template,
-      onBack: _minimizeLiveWorkout,
-      onDiscard: _discardLiveWorkout,
-      onCompleteWorkout: _completeLiveWorkout,
-      showBottomActions: false,
-      onStateChanged: (state) {
-        if (!mounted) return;
-        setState(() {
-          _liveMiniState = state;
-        });
-        _publishLiveShellState();
-      },
-      onSummaryChanged: (summary) {
-        if (!mounted) return;
-        _liveSummaryState = summary;
-      },
-    );
+    if (_liveWorkoutView == null || _liveWorkoutTemplateId != template.id) {
+      _liveWorkoutTemplateId = template.id;
+      _liveWorkoutView = _createLiveWorkoutView(template);
+    }
+    return _liveWorkoutView!;
   }
 }
 
 class WorkoutLiveDock extends StatelessWidget {
-  const WorkoutLiveDock({
-    super.key,
-    required this.state,
-    required this.onTap,
-    required this.onClose,
-  });
+  const WorkoutLiveDock({super.key, required this.state, required this.onTap});
 
   final LiveWorkoutMiniState state;
   final VoidCallback onTap;
-  final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
@@ -1349,13 +1548,6 @@ class WorkoutLiveDock extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
-              IconButton(
-                onPressed: onClose,
-                icon: Icon(Icons.close_rounded, color: Colors.grey.shade600),
-                splashRadius: 18,
-                tooltip: 'Close live workout',
-              ),
             ],
           ),
         ),
@@ -1370,45 +1562,36 @@ class _TemplatesHeader extends StatelessWidget {
     this.showBack = false,
     this.onBack,
     this.rightWidget,
+    this.backButtonIcon,
   });
 
   final String title;
   final bool showBack;
   final VoidCallback? onBack;
   final Widget? rightWidget;
+  final Widget? backButtonIcon;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        if (showBack)
-          IconButton(
-            onPressed: onBack,
-            icon: const PhosphorIcon(PhosphorIconsRegular.caretLeft, size: 28),
-          )
-        else
-          const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            title.toUpperCase(),
-            textAlign: showBack ? TextAlign.center : TextAlign.left,
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-          ),
-        ),
-        if (showBack)
-          SizedBox(
-            width: 56,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: rightWidget ?? const SizedBox.shrink(),
-            ),
-          )
-        else
-          Align(
-            alignment: Alignment.centerRight,
-            child: rightWidget ?? const SizedBox(width: 12),
-          ),
-      ],
+    return LiftIslandHeader(
+      title: title.toUpperCase(),
+      leading:
+          showBack
+              ? LiftIslandHeaderAction(
+                onTap: onBack,
+                child: IconTheme(
+                  data: const IconThemeData(color: Colors.white),
+                  child:
+                      backButtonIcon ??
+                      const PhosphorIcon(
+                        PhosphorIconsRegular.caretLeft,
+                        size: 28,
+                        color: Colors.white,
+                      ),
+                ),
+              )
+              : null,
+      trailing: rightWidget,
     );
   }
 }
@@ -2267,7 +2450,7 @@ class _CreateActionsRow extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 14),
             ),
             onPressed: onEmptyWorkout,
-            child: const Text('EMPTY WORKOUT'),
+            child: const Text('Empty workout'),
           ),
         ),
         const SizedBox(width: 12),
@@ -2287,6 +2470,51 @@ class _CreateActionsRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _TemplateActionRow extends StatelessWidget {
+  const _TemplateActionRow({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.foregroundColor,
+  });
+
+  final PhosphorIconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final Color? foregroundColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = foregroundColor ?? Colors.black87;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Ink(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.grey.withValues(alpha: 0.20)),
+          color: Colors.white.withValues(alpha: 0.35),
+        ),
+        child: Row(
+          children: [
+            PhosphorIcon(icon, size: 20, color: color),
+            const SizedBox(width: 10),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -2319,7 +2547,7 @@ class _TemplateDetailActionBar extends StatelessWidget {
                 ),
                 onPressed: onResumeWorkout,
                 child: const Text(
-                  'RESUME',
+                  'Resume',
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                 ),
               )
@@ -2335,7 +2563,7 @@ class _TemplateDetailActionBar extends StatelessWidget {
                 ),
                 onPressed: onStartWorkout,
                 child: const Text(
-                  'START',
+                  'Start',
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                 ),
               ),
@@ -2365,16 +2593,11 @@ class _TemplateEditorScreen extends StatelessWidget {
     return Column(
       children: [
         _TemplatesHeader(
-          title: 'Templates',
+          title: title,
           showBack: showBack,
           onBack: onBack,
-          rightWidget: IconButton(
-            onPressed: () {},
-            icon: const PhosphorIcon(
-              PhosphorIconsRegular.userCircle,
-              color: kAccentColor,
-            ),
-          ),
+          backButtonIcon: const PhosphorIcon(PhosphorIconsRegular.x, size: 24),
+          rightWidget: const SizedBox.shrink(),
         ),
         const SizedBox(height: 8),
         Expanded(
@@ -2405,11 +2628,22 @@ class _TemplateEditorForm extends StatefulWidget {
 }
 
 class _TemplateEditorFormState extends State<_TemplateEditorForm> {
+  static const int _minTargetDurationMinutes = 20;
+  static const int _maxTargetDurationMinutes = 120;
+  static const int _targetDurationStepMinutes = 5;
+
   late final TextEditingController _nameController;
   late final TextEditingController _imageController;
+  late final FixedExtentScrollController _durationDialController;
   late int _durationMinutes;
   late List<WorkoutTemplateExercise> _exercises;
   final Set<String> _expandedExerciseIds = <String>{};
+  late final List<int> _durationDialValues = List<int>.generate(
+    ((_maxTargetDurationMinutes - _minTargetDurationMinutes) ~/
+            _targetDurationStepMinutes) +
+        1,
+    (index) => _minTargetDurationMinutes + (index * _targetDurationStepMinutes),
+  );
   final List<String> _heroImageUploadPresets = const [
     'https://images.pexels.com/photos/949130/pexels-photo-949130.jpeg',
     'https://images.pexels.com/photos/1552242/pexels-photo-1552242.jpeg',
@@ -2455,12 +2689,33 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
   int get _durationOverTargetMinutes =>
       math.max(0, _estimatedDurationFromExercisesMinutes - _durationMinutes);
 
+  int _durationDialIndexFor(int minutes) {
+    final rawIndex =
+        ((minutes - _minTargetDurationMinutes) / _targetDurationStepMinutes)
+            .round();
+    return math.max(0, math.min(_durationDialValues.length - 1, rawIndex));
+  }
+
+  int _durationDialValueAt(int index) {
+    final safeIndex = math.max(
+      0,
+      math.min(_durationDialValues.length - 1, index),
+    );
+    return _durationDialValues[safeIndex];
+  }
+
+  int _snapDurationToDial(int minutes) =>
+      _durationDialValueAt(_durationDialIndexFor(minutes));
+
   @override
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.template.name);
     _imageController = TextEditingController(text: widget.template.imageUrl);
-    _durationMinutes = widget.template.durationMinutes;
+    _durationMinutes = _snapDurationToDial(widget.template.durationMinutes);
+    _durationDialController = FixedExtentScrollController(
+      initialItem: _durationDialIndexFor(_durationMinutes),
+    );
     _exercises = List<WorkoutTemplateExercise>.from(widget.template.exercises);
     _expandedExerciseIds.addAll(_exercises.map((e) => e.id));
   }
@@ -2469,6 +2724,7 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
   void dispose() {
     _nameController.dispose();
     _imageController.dispose();
+    _durationDialController.dispose();
     super.dispose();
   }
 
@@ -2494,6 +2750,14 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
     final tags = <String>{};
     for (final exercise in exercises) {
       final name = exercise.name.toLowerCase();
+      final isForearmFocused =
+          name.contains('forearm') ||
+          name.contains('wrist') ||
+          name.contains('grip') ||
+          name.contains('farmer') ||
+          name.contains('reverse curl') ||
+          name.contains('pronation') ||
+          name.contains('supination');
       if (name.contains('ham')) tags.add('Hamstrings');
       if (name.contains('quad') ||
           name.contains('leg press') ||
@@ -2511,12 +2775,24 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
           name.contains('pull')) {
         tags.add('Back');
       }
-      if (name.contains('curl') && !name.contains('ham')) tags.add('Biceps');
+      if (isForearmFocused) tags.add('Forearms');
+      if ((name.contains('bicep') ||
+              (name.contains('curl') && !name.contains('ham'))) &&
+          !isForearmFocused &&
+          !name.contains('tricep')) {
+        tags.add('Biceps');
+      }
       if (name.contains('press') && !name.contains('leg')) tags.add('Chest');
       if (name.contains('shoulder') || name.contains('lateral')) {
         tags.add('Shoulders');
       }
-      if (name.contains('tricep')) tags.add('Triceps');
+      if (name.contains('tricep') ||
+          name.contains('pushdown') ||
+          name.contains('skull crusher') ||
+          name.contains('overhead extension') ||
+          name.contains('dip')) {
+        tags.add('Triceps');
+      }
       if (name.contains('ab') ||
           name.contains('core') ||
           name.contains('plank')) {
@@ -2716,6 +2992,14 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
   List<String> _heuristicMuscleTagsForName(String rawName) {
     final name = rawName.toLowerCase();
     final tags = <String>{};
+    final isForearmFocused =
+        name.contains('forearm') ||
+        name.contains('wrist') ||
+        name.contains('grip') ||
+        name.contains('farmer') ||
+        name.contains('reverse curl') ||
+        name.contains('pronation') ||
+        name.contains('supination');
     if (name.contains('ham')) tags.add('Hamstrings');
     if (name.contains('quad') ||
         name.contains('leg press') ||
@@ -2731,7 +3015,13 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
     if (name.contains('lat') || name.contains('row') || name.contains('pull')) {
       tags.add('Back');
     }
-    if (name.contains('curl') && !name.contains('ham')) {
+    if (isForearmFocused) {
+      tags.add('Forearms');
+    }
+    if ((name.contains('bicep') ||
+            (name.contains('curl') && !name.contains('ham'))) &&
+        !isForearmFocused &&
+        !name.contains('tricep')) {
       tags.add('Biceps');
     }
     if (name.contains('press') && !name.contains('leg')) {
@@ -2740,7 +3030,11 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
     if (name.contains('shoulder') || name.contains('lateral')) {
       tags.add('Shoulders');
     }
-    if (name.contains('tricep')) {
+    if (name.contains('tricep') ||
+        name.contains('pushdown') ||
+        name.contains('skull crusher') ||
+        name.contains('overhead extension') ||
+        name.contains('dip')) {
       tags.add('Triceps');
     }
     if (name.contains('ab') ||
@@ -3564,7 +3858,7 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               SectionBoundary(
                 borderRadius: 16,
                 child: Column(
@@ -3574,7 +3868,7 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
                       'Template settings',
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     TextField(
                       controller: _nameController,
                       onChanged: (_) => setState(() {}),
@@ -3583,7 +3877,7 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
                         border: OutlineInputBorder(),
                       ),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     Text(
                       'Muscles worked (generated from exercises)',
                       style: TextStyle(
@@ -3592,7 +3886,7 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
                         color: Colors.grey.shade700,
                       ),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 4),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -3601,7 +3895,7 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
                               .map((tag) => _EditStateChip(label: tag))
                               .toList(),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     Row(
                       children: [
                         const Text(
@@ -3621,10 +3915,10 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
                       ),
                     ),
                     if (_durationOverTargetMinutes > 0) ...[
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       Container(
                         width: double.infinity,
-                        padding: const EdgeInsets.all(10),
+                        padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
                           color: Colors.orange.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(12),
@@ -3654,21 +3948,90 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
                         ),
                       ),
                     ],
-                    Slider(
-                      value: _durationMinutes.toDouble(),
-                      min: 20,
-                      max: 120,
-                      divisions: 20,
-                      activeColor: kAccentColor,
-                      label: 'Target $_durationMinutes',
-                      onChanged: (value) {
-                        setState(() => _durationMinutes = value.round());
-                      },
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        color: Colors.grey.shade50,
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      child: Column(
+                        children: [
+                          SizedBox(
+                            height: 98,
+                            child: CupertinoPicker(
+                              scrollController: _durationDialController,
+                              itemExtent: 30,
+                              useMagnifier: true,
+                              magnification: 1.08,
+                              diameterRatio: 1.25,
+                              squeeze: 1.14,
+                              selectionOverlay:
+                                  CupertinoPickerDefaultSelectionOverlay(
+                                    background: kAccentColor.withValues(
+                                      alpha: 0.10,
+                                    ),
+                                  ),
+                              onSelectedItemChanged: (index) {
+                                final nextValue = _durationDialValueAt(index);
+                                if (nextValue == _durationMinutes) return;
+                                setState(() => _durationMinutes = nextValue);
+                              },
+                              children:
+                                  _durationDialValues
+                                      .map(
+                                        (minutes) => Center(
+                                          child: Text(
+                                            '$minutes mins',
+                                            style: TextStyle(
+                                              fontWeight:
+                                                  minutes == _durationMinutes
+                                                      ? FontWeight.w700
+                                                      : FontWeight.w500,
+                                              color:
+                                                  minutes == _durationMinutes
+                                                      ? kAccentColor
+                                                      : Colors.grey.shade700,
+                                            ),
+                                          ),
+                                        ),
+                                      )
+                                      .toList(),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            child: Row(
+                              children: [
+                                Text(
+                                  '$_minTargetDurationMinutes mins',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                                const Spacer(),
+                                Text(
+                                  '$_maxTargetDurationMinutes mins',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Text(
@@ -3678,14 +4041,9 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: _addExerciseFromCatalog,
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add exercise'),
-                  ),
                 ],
               ),
+              const SizedBox(height: 8),
               if (_exercises.isEmpty)
                 SectionBoundary(
                   borderRadius: 16,
@@ -3713,7 +4071,7 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
                     final exercise = _exercises[index];
                     return Padding(
                       key: ValueKey(exercise.id),
-                      padding: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.only(bottom: 8),
                       child: ReorderableDelayedDragStartListener(
                         index: index,
                         child: _ExerciseDetailCard(
@@ -3821,40 +4179,55 @@ class _TemplateEditorFormState extends State<_TemplateEditorForm> {
             ],
           ),
         ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            InkWell(
-              onTap: _addExerciseFromCatalog,
-              borderRadius: BorderRadius.circular(16),
-              child: Ink(
-                width: 58,
-                height: 58,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.grey.shade300),
-                  color: Colors.white,
-                ),
-                child: const Icon(Icons.add, size: 28, color: kAccentColor),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: kAccentColor,
-                  padding: const EdgeInsets.symmetric(vertical: 15),
-                ),
-                onPressed: _saveTemplate,
-                child: const Text('SAVE TEMPLATE'),
-              ),
-            ),
-          ],
+        const SizedBox(height: 6),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Text(
+            'Tip: hold and drag an exercise card to rearrange. Tap a card to collapse/expand while editing.',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          ),
         ),
         const SizedBox(height: 6),
-        Text(
-          'Tip: hold and drag an exercise card to rearrange. Tap a card to collapse/expand while editing.',
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+        SafeArea(
+          top: false,
+          bottom: false,
+          child: GlassIsland(
+            height: 70,
+            borderRadius: 32,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            child: Row(
+              children: [
+                InkWell(
+                  onTap: _addExerciseFromCatalog,
+                  borderRadius: BorderRadius.circular(14),
+                  child: Ink(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.grey.shade300),
+                      color: Colors.white.withValues(alpha: 0.88),
+                    ),
+                    child: const Icon(Icons.add, size: 24, color: kAccentColor),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: kAccentColor.withValues(alpha: 0.88),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shadowColor: Colors.transparent,
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                    ),
+                    onPressed: _saveTemplate,
+                    child: const Text('Save'),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ],
     );

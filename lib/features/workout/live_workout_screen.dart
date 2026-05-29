@@ -7,6 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:lift/app/theme.dart';
 import 'package:lift/shared/models/workout_history_entry.dart';
 import 'package:lift/shared/models/workout_template.dart';
+import 'package:lift/shared/widgets/lift_action_button.dart';
+import 'package:lift/shared/widgets/lift_dialogs.dart';
+import 'package:lift/shared/widgets/lift_menu_sheet.dart';
 import 'package:lift/shared/widgets/surfaces.dart';
 
 const Color _kGlassGreyTint = Color(0xFFD8DDE3);
@@ -92,6 +95,12 @@ const List<_LiveSwapExerciseCatalogItem> _kLiveSwapExerciseCatalog = [
     keywords: ['lunge', 'dumbbell', 'leg'],
   ),
   _LiveSwapExerciseCatalogItem(
+    name: 'Standing Calf Raise',
+    muscleGroups: ['Calves'],
+    equipment: _LiveSwapExerciseEquipment.machine,
+    keywords: ['calf', 'raise', 'standing', 'lower leg'],
+  ),
+  _LiveSwapExerciseCatalogItem(
     name: 'Lat Pulldown',
     muscleGroups: ['Back', 'Biceps'],
     equipment: _LiveSwapExerciseEquipment.cables,
@@ -114,6 +123,12 @@ const List<_LiveSwapExerciseCatalogItem> _kLiveSwapExerciseCatalog = [
     muscleGroups: ['Back', 'Biceps'],
     equipment: _LiveSwapExerciseEquipment.bodyweight,
     keywords: ['pull', 'up', 'back'],
+  ),
+  _LiveSwapExerciseCatalogItem(
+    name: 'Wrist Curl',
+    muscleGroups: ['Forearms'],
+    equipment: _LiveSwapExerciseEquipment.dumbbell,
+    keywords: ['wrist', 'curl', 'forearm', 'grip'],
   ),
   _LiveSwapExerciseCatalogItem(
     name: 'Chest Press',
@@ -247,6 +262,7 @@ class LiveWorkoutScreen extends StatefulWidget {
     this.showBottomActions = true,
     this.onStateChanged,
     this.onSummaryChanged,
+    this.onAddExerciseActionChanged,
   });
 
   final WorkoutTemplate template;
@@ -256,6 +272,7 @@ class LiveWorkoutScreen extends StatefulWidget {
   final bool showBottomActions;
   final ValueChanged<LiveWorkoutMiniState>? onStateChanged;
   final ValueChanged<LiveWorkoutSummaryState>? onSummaryChanged;
+  final ValueChanged<VoidCallback?>? onAddExerciseActionChanged;
 
   @override
   State<LiveWorkoutScreen> createState() => _LiveWorkoutScreenState();
@@ -343,6 +360,8 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
   late final DateTime _startedAt;
   late final List<_LiveExerciseRun> _runs;
   Timer? _ticker;
+  bool _isDisposed = false;
+  bool _tickFrameScheduled = false;
   int _restRemainingSeconds = 0;
   bool _isRestTimerActive = false;
   final List<_LiveActionRecord> _actionHistory = <_LiveActionRecord>[];
@@ -479,6 +498,31 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     widget.onSummaryChanged?.call(_buildSummaryState());
   }
 
+  void _handleExternalAddExercise() {
+    if (!mounted) return;
+    unawaited(_addExerciseAtEnd());
+  }
+
+  void _scheduleTickerRefresh() {
+    if (_isDisposed || !mounted || _tickFrameScheduled) return;
+    _tickFrameScheduled = true;
+    final binding = WidgetsBinding.instance;
+    binding.addPostFrameCallback((_) {
+      _tickFrameScheduled = false;
+      if (_isDisposed || !mounted) return;
+      setState(() {
+        if (_isRestTimerActive) {
+          _restRemainingSeconds = math.max(0, _restRemainingSeconds - 1);
+          if (_restRemainingSeconds == 0) {
+            _isRestTimerActive = false;
+          }
+        }
+      });
+      _emitMiniState();
+    });
+    binding.scheduleFrame();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -505,23 +549,34 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     }
 
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      setState(() {
-        if (_isRestTimerActive) {
-          _restRemainingSeconds -= 1;
-        }
-      });
-      _emitMiniState();
+      _scheduleTickerRefresh();
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _emitMiniState();
+      widget.onAddExerciseActionChanged?.call(_handleExternalAddExercise);
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant LiveWorkoutScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.onAddExerciseActionChanged ==
+        widget.onAddExerciseActionChanged) {
+      return;
+    }
+    oldWidget.onAddExerciseActionChanged?.call(null);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.onAddExerciseActionChanged?.call(_handleExternalAddExercise);
     });
   }
 
   @override
   void dispose() {
+    _isDisposed = true;
+    widget.onAddExerciseActionChanged?.call(null);
     _ticker?.cancel();
     super.dispose();
   }
@@ -927,41 +982,18 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     if (exerciseIndex < 0 || exerciseIndex >= _runs.length) return;
     final run = _runs[exerciseIndex];
     if (rowIndex < 0 || rowIndex >= run.exercise.presetRows.length) return;
-    final controller = TextEditingController(
-      text: run.exercise.presetRows[rowIndex].reps.toString(),
-    );
-    final value = await showDialog<int>(
+    final value = await showLiftTextInputDialog<int>(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Edit reps'),
-          content: TextField(
-            controller: controller,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              labelText: 'Reps',
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: kAccentColor),
-              onPressed: () {
-                final reps = int.tryParse(controller.text.trim());
-                if (reps == null) return;
-                Navigator.pop(context, reps.clamp(0, 99));
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        );
+      title: 'Edit reps',
+      initialValue: run.exercise.presetRows[rowIndex].reps.toString(),
+      keyboardType: TextInputType.number,
+      labelText: 'Reps',
+      parser: (value) {
+        final reps = int.tryParse(value);
+        if (reps == null) return null;
+        return reps.clamp(0, 99);
       },
     );
-    controller.dispose();
     if (value == null || !mounted) return;
     setState(() {
       final rows = List<WorkoutTemplateSetRow>.from(run.exercise.presetRows);
@@ -1167,41 +1199,18 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
   }
 
   Future<double?> _promptTypedWeight(double currentValue) async {
-    final controller = TextEditingController(
-      text: currentValue.toStringAsFixed(currentValue % 1 == 0 ? 0 : 1),
-    );
-    final result = await showDialog<double>(
+    final result = await showLiftTextInputDialog<double>(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Type weight'),
-          content: TextField(
-            controller: controller,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              suffixText: 'kg',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: kAccentColor),
-              onPressed: () {
-                final value = double.tryParse(controller.text.trim());
-                if (value == null) return;
-                Navigator.pop(context, value.clamp(0, 400));
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        );
+      title: 'Type weight',
+      initialValue: currentValue.toStringAsFixed(currentValue % 1 == 0 ? 0 : 1),
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      suffixText: 'kg',
+      parser: (value) {
+        final parsed = double.tryParse(value);
+        if (parsed == null) return null;
+        return parsed.clamp(0, 400).toDouble();
       },
     );
-    controller.dispose();
     return result;
   }
 
@@ -1220,6 +1229,14 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
   List<String> _heuristicMuscleTagsForName(String rawName) {
     final name = rawName.toLowerCase();
     final tags = <String>{};
+    final isForearmFocused =
+        name.contains('forearm') ||
+        name.contains('wrist') ||
+        name.contains('grip') ||
+        name.contains('farmer') ||
+        name.contains('reverse curl') ||
+        name.contains('pronation') ||
+        name.contains('supination');
     if (name.contains('ham')) tags.add('Hamstrings');
     if (name.contains('quad') ||
         name.contains('leg press') ||
@@ -1235,12 +1252,24 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     if (name.contains('lat') || name.contains('row') || name.contains('pull')) {
       tags.add('Back');
     }
-    if (name.contains('curl') && !name.contains('ham')) tags.add('Biceps');
+    if (isForearmFocused) tags.add('Forearms');
+    if ((name.contains('bicep') ||
+            (name.contains('curl') && !name.contains('ham'))) &&
+        !isForearmFocused &&
+        !name.contains('tricep')) {
+      tags.add('Biceps');
+    }
     if (name.contains('press') && !name.contains('leg')) tags.add('Chest');
     if (name.contains('shoulder') || name.contains('lateral')) {
       tags.add('Shoulders');
     }
-    if (name.contains('tricep')) tags.add('Triceps');
+    if (name.contains('tricep') ||
+        name.contains('pushdown') ||
+        name.contains('skull crusher') ||
+        name.contains('overhead extension') ||
+        name.contains('dip')) {
+      tags.add('Triceps');
+    }
     if (name.contains('ab') ||
         name.contains('core') ||
         name.contains('plank')) {
@@ -1799,7 +1828,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                                     child: const Text(
                                       'Cancel',
                                       style: TextStyle(
-                                        fontWeight: FontWeight.w600,
+                                        fontWeight: FontWeight.w500,
                                       ),
                                     ),
                                   ),
@@ -1834,7 +1863,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                                     child: const Text(
                                       'Log Set',
                                       style: TextStyle(
-                                        fontWeight: FontWeight.w600,
+                                        fontWeight: FontWeight.w500,
                                       ),
                                     ),
                                   ),
@@ -2064,41 +2093,38 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     if (!canAddSuperset) return false;
     return showModalBottomSheet<bool>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.24),
+      builder: (sheetContext) {
         return SafeArea(
           top: false,
+          bottom: false,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+            padding: EdgeInsets.fromLTRB(
+              12,
+              0,
+              12,
+              10 + MediaQuery.paddingOf(sheetContext).bottom,
+            ),
+            child: LiftMenuSheet(
+              title: title,
+              subtitle: 'Choose how to insert the next movement.',
               children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
+                LiftMenuActionTile(
+                  icon: const Icon(Icons.add_circle_outline_rounded),
+                  title: 'Add as new exercise',
+                  subtitle: 'Creates a standalone exercise card',
+                  accent: kAccentColor,
+                  onTap: () => Navigator.pop(sheetContext, false),
                 ),
-                const SizedBox(height: 12),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.add_circle_outline_rounded),
-                  title: const Text('Add as new exercise'),
-                  subtitle: const Text('Creates a standalone exercise card'),
-                  onTap: () => Navigator.pop(context, false),
-                ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.link_rounded),
-                  title: const Text('Add as superset'),
-                  subtitle: const Text(
-                    'Adds it to the same superset block as the previous exercise',
-                  ),
-                  onTap: () => Navigator.pop(context, true),
+                const SizedBox(height: 8),
+                LiftMenuActionTile(
+                  icon: const Icon(Icons.link_rounded),
+                  title: 'Add as superset',
+                  subtitle:
+                      'Adds it to the same superset block as the previous exercise',
+                  accent: const Color(0xFF0A7A6B),
+                  onTap: () => Navigator.pop(sheetContext, true),
                 ),
               ],
             ),
@@ -2486,28 +2512,13 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
   }
 
   Future<void> _confirmDiscard() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showLiftConfirmDialog(
       context: context,
-      builder:
-          (context) => AlertDialog(
-            title: const Text('Discard workout?'),
-            content: const Text(
-              'This will leave the live workout session and lose unsaved progress in this prototype.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: Colors.red.shade600,
-                ),
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Discard'),
-              ),
-            ],
-          ),
+      title: 'Discard workout?',
+      message:
+          'This will leave the live workout session and lose unsaved progress in this prototype.',
+      confirmLabel: 'Discard',
+      confirmColor: Colors.red.shade600,
     );
     if (confirmed == true && mounted) {
       widget.onDiscard();
@@ -2526,6 +2537,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.24),
       isScrollControlled: true,
       builder: (sheetContext) {
         return StatefulBuilder(
@@ -2540,113 +2552,80 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
               top: false,
               bottom: false,
               child: Padding(
-                padding: EdgeInsets.only(
-                  bottom: MediaQuery.viewInsetsOf(context).bottom,
+                padding: EdgeInsets.fromLTRB(
+                  12,
+                  0,
+                  12,
+                  10 +
+                      MediaQuery.paddingOf(context).bottom +
+                      MediaQuery.viewInsetsOf(context).bottom,
                 ),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: const BorderRadius.vertical(
-                      top: Radius.circular(24),
+                child: LiftMenuSheet(
+                  title: 'Timer options',
+                  subtitle: 'Adjust rest time and session feedback.',
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+                  children: [
+                    const SizedBox(height: 2),
+                    const Text(
+                      'Add time',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.2,
+                      ),
                     ),
-                    border: Border.all(color: _glassGreyTint(0.28)),
-                  ),
-                  padding: EdgeInsets.fromLTRB(
-                    18,
-                    12,
-                    18,
-                    12 + MediaQuery.paddingOf(context).bottom,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Center(
-                        child: Container(
-                          width: 44,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade300,
-                            borderRadius: BorderRadius.circular(999),
-                          ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        _TimerOptionChip(
+                          label: '+15s',
+                          onTap: () => _addRestTimeFromOptions(15),
                         ),
-                      ),
-                      const SizedBox(height: 12),
-                      const Text(
-                        'Timer options',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800,
+                        _TimerOptionChip(
+                          label: '+30s',
+                          onTap: () => _addRestTimeFromOptions(30),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Adjust rest time and session feedback.',
-                        style: TextStyle(color: Colors.grey.shade600),
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'Add time',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.2,
+                        _TimerOptionChip(
+                          label: '+60s',
+                          onTap: () => _addRestTimeFromOptions(60),
                         ),
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: [
-                          _TimerOptionChip(
-                            label: '+15s',
-                            onTap: () => _addRestTimeFromOptions(15),
+                        _TimerOptionChip(
+                          label: '+2m',
+                          onTap: () => _addRestTimeFromOptions(120),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    _TimerSettingTile(
+                      title: 'Announcements',
+                      subtitle: 'Voice time cues',
+                      value: _announcementsEnabled,
+                      onChanged:
+                          (value) => updateSetting(
+                            () => _announcementsEnabled = value,
                           ),
-                          _TimerOptionChip(
-                            label: '+30s',
-                            onTap: () => _addRestTimeFromOptions(30),
-                          ),
-                          _TimerOptionChip(
-                            label: '+60s',
-                            onTap: () => _addRestTimeFromOptions(60),
-                          ),
-                          _TimerOptionChip(
-                            label: '+2m',
-                            onTap: () => _addRestTimeFromOptions(120),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      SwitchListTile.adaptive(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Announcements'),
-                        subtitle: const Text('Voice time cues'),
-                        value: _announcementsEnabled,
-                        onChanged:
-                            (value) => updateSetting(
-                              () => _announcementsEnabled = value,
-                            ),
-                      ),
-                      SwitchListTile.adaptive(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Haptics'),
-                        subtitle: const Text('Vibration cues'),
-                        value: _hapticsEnabled,
-                        onChanged:
-                            (value) =>
-                                updateSetting(() => _hapticsEnabled = value),
-                      ),
-                      SwitchListTile.adaptive(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Sound'),
-                        subtitle: const Text('Audio alerts'),
-                        value: _soundEnabled,
-                        onChanged:
-                            (value) =>
-                                updateSetting(() => _soundEnabled = value),
-                      ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 10),
+                    _TimerSettingTile(
+                      title: 'Haptics',
+                      subtitle: 'Vibration cues',
+                      value: _hapticsEnabled,
+                      onChanged:
+                          (value) =>
+                              updateSetting(() => _hapticsEnabled = value),
+                    ),
+                    const SizedBox(height: 10),
+                    _TimerSettingTile(
+                      title: 'Sound',
+                      subtitle: 'Audio alerts',
+                      value: _soundEnabled,
+                      onChanged:
+                          (value) =>
+                              updateSetting(() => _soundEnabled = value),
+                    ),
+                  ],
                 ),
               ),
             );
@@ -2881,7 +2860,6 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 const footerSectionHeight = 76.0;
-                const listBottomPeekUnderFooter = 24.0;
                 final showBottomActions = widget.showBottomActions;
 
                 Widget footerButtonsPlate() {
@@ -2895,32 +2873,26 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                     child: Row(
                       children: [
                         Expanded(
-                          child: OutlinedButton(
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.red.shade400,
-                              side: BorderSide(color: Colors.red.shade200),
-                              backgroundColor: Colors.white.withValues(
-                                alpha: 0.35,
-                              ),
-                              padding: const EdgeInsets.symmetric(vertical: 15),
-                            ),
-                            onPressed: _confirmDiscard,
-                            child: const Text('DISCARD'),
+                          child: LiftActionButton(
+                            label: 'Discard',
+                            color: Colors.red.shade400,
+                            onTap: _confirmDiscard,
                           ),
                         ),
-                        const SizedBox(width: 12),
+                        const SizedBox(width: 10),
+                        LiftActionIconButton(
+                          icon: Icons.add_rounded,
+                          color: kAccentColor,
+                          size: 48,
+                          iconSize: 24,
+                          borderRadius: 18,
+                          onTap: _addExerciseAtEnd,
+                        ),
+                        const SizedBox(width: 10),
                         Expanded(
-                          child: FilledButton(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: kAccentColor.withValues(
-                                alpha: 0.88,
-                              ),
-                              elevation: 0,
-                              shadowColor: Colors.transparent,
-                              padding: const EdgeInsets.symmetric(vertical: 15),
-                            ),
-                            onPressed: widget.onCompleteWorkout,
-                            child: const Text('COMPLETE'),
+                          child: LiftActionButton(
+                            label: 'Complete',
+                            onTap: widget.onCompleteWorkout,
                           ),
                         ),
                       ],
@@ -2944,10 +2916,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                       child: ListView.builder(
                         padding: EdgeInsets.only(
                           bottom:
-                              showBottomActions
-                                  ? footerSectionHeight -
-                                      listBottomPeekUnderFooter
-                                  : 12,
+                              showBottomActions ? footerSectionHeight + 16 : 16,
                         ),
                         itemCount: _runs.length + 1,
                         itemBuilder: (context, index) {
@@ -3092,33 +3061,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                                 children: [
                                   if (_runs.isNotEmpty)
                                     buildInsertDropZone(_runs.length),
-                                  InkWell(
-                                    onTap: _addExerciseAtEnd,
-                                    borderRadius: BorderRadius.circular(999),
-                                    child: Ink(
-                                      width: 52,
-                                      height: 52,
-                                      decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(
-                                          999,
-                                        ),
-                                        color: Colors.white.withValues(
-                                          alpha: 0.55,
-                                        ),
-                                        border: Border.all(
-                                          color: kAccentColor.withValues(
-                                            alpha: 0.25,
-                                          ),
-                                        ),
-                                      ),
-                                      child: const Icon(
-                                        Icons.add_rounded,
-                                        color: kAccentColor,
-                                        size: 28,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 12),
+                                  const SizedBox(height: 32),
                                 ],
                               ),
                             );
@@ -3419,11 +3362,78 @@ class _TimerOptionChip extends StatelessWidget {
             label,
             style: const TextStyle(
               color: kAccentColor,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w500,
               letterSpacing: 0.1,
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _TimerSettingTile extends StatelessWidget {
+  const _TimerSettingTile({
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white.withValues(alpha: 0.82),
+            kAccentColor.withValues(alpha: 0.06),
+          ],
+        ),
+        border: Border.all(color: kAccentColor.withValues(alpha: 0.14)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF171717),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF65707C),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          CupertinoSwitch(
+            value: value,
+            activeTrackColor: kAccentColor,
+            onChanged: onChanged,
+          ),
+        ],
       ),
     );
   }
@@ -3822,21 +3832,21 @@ class _LiveExerciseCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: _LiveExerciseActionButton(
-                    label: 'STATS',
+                    label: 'Stats',
                     onPressed: onStats,
                   ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: _LiveExerciseActionButton(
-                    label: 'ADD SET',
+                    label: 'Add set',
                     onPressed: onAddSet,
                   ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: _LiveExerciseActionButton(
-                    label: 'SWAP',
+                    label: 'Swap',
                     onPressed: onSwap,
                   ),
                 ),
@@ -4281,7 +4291,7 @@ class _RowValue extends StatelessWidget {
               child: Text(
                 text,
                 textAlign: TextAlign.center,
-                style: TextStyle(fontWeight: FontWeight.w700, color: color),
+                style: TextStyle(fontWeight: FontWeight.w500, color: color),
               ),
             )
             : Padding(
@@ -4289,7 +4299,7 @@ class _RowValue extends StatelessWidget {
               child: Text(
                 text,
                 textAlign: TextAlign.center,
-                style: TextStyle(fontWeight: FontWeight.w700, color: color),
+                style: TextStyle(fontWeight: FontWeight.w500, color: color),
               ),
             );
 
