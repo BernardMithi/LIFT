@@ -3,8 +3,21 @@ import 'dart:math' as math;
 import 'package:lift/shared/models/article.dart';
 import 'package:lift/shared/services/articles_api.dart';
 
-const String _kDefaultArticleImage =
-    'https://blocks.astratic.com/img/general-img-landscape.png';
+// Real fitness images for preview.
+const String _kImgSquat =
+    'https://images.pexels.com/photos/4498606/pexels-photo-4498606.jpeg?auto=compress&cs=tinysrgb&w=800';
+const String _kImgBack =
+    'https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?w=400';
+const String _kImgGym =
+    'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=400';
+const String _kImgRecovery =
+    'https://images.pexels.com/photos/4324020/pexels-photo-4324020.jpeg?auto=compress&cs=tinysrgb&w=800';
+const String _kImgCardio =
+    'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?w=400';
+const String _kImgTechnique =
+    'https://images.unsplash.com/photo-1541534741688-6078c6bfb5c5?w=400';
+const String _kImgKettlebell =
+    'https://images.unsplash.com/photo-1549060279-7e168fcee0c2?w=400';
 
 class InMemoryArticlesApi extends ArticlesApi {
   InMemoryArticlesApi({
@@ -244,7 +257,7 @@ final List<Article> _defaultArticles = <Article>[
         'Set your stance, brace your trunk, and control depth to maximize quads while protecting your knees.',
     content:
         'Start with your feet shoulder-width apart and keep your full foot planted.\n\nDrive through mid-foot, maintain a neutral spine, and avoid bouncing at the bottom. Tempo matters more than load in early progression.\n\nProgramming tip: pair Hack Squat with hamstring curls for a balanced lower-body block.',
-    imageUrl: _kDefaultArticleImage,
+    imageUrl: _kImgSquat,
     authorId: 'coach_nia',
     tags: ['quads', 'machine', 'technique'],
     machineIds: ['hack-squat'],
@@ -261,7 +274,7 @@ final List<Article> _defaultArticles = <Article>[
         'A quick checklist to keep your pulldowns in your back and out of your elbows.',
     content:
         'Think elbows toward your back pockets. Keep ribs stacked and avoid over-leaning.\n\nUse full control on the eccentric. If grip fails first, use straps so lats stay the limiting factor.\n\nThis setup maps directly to machine_lat_pulldown_01 in your gym.',
-    imageUrl: _kDefaultArticleImage,
+    imageUrl: _kImgBack,
     authorId: 'coach_ari',
     tags: ['back', 'form', 'machine'],
     machineIds: ['machine_lat_pulldown_01'],
@@ -278,7 +291,7 @@ final List<Article> _defaultArticles = <Article>[
         'A complete pull day built around your gym machines with realistic rest targets.',
     content:
         '1) Lat Pulldown\n2) Seated Row\n3) Dumbbell Rear Delt Fly\n\nKeep rest between 75-120 seconds. Track reps first, then progress weight in 2.5kg jumps.',
-    imageUrl: _kDefaultArticleImage,
+    imageUrl: _kImgGym,
     authorId: 'owner_lift',
     tags: ['pull day', 'beginner', 'programming'],
     machineIds: ['machine_lat_pulldown_01'],
@@ -294,7 +307,7 @@ final List<Article> _defaultArticles = <Article>[
     summary: 'How to adjust load based on sleep, soreness, and readiness data.',
     content:
         'If resting heart rate trends up and sleep drops below baseline, reduce session density for 48 hours.\n\nUse lighter warmups and lower RPE work until recovery metrics normalize.',
-    imageUrl: _kDefaultArticleImage,
+    imageUrl: _kImgRecovery,
     authorId: 'coach_nia',
     tags: ['recovery', 'sleep', 'readiness'],
     machineIds: const <String>[],
@@ -310,7 +323,7 @@ final List<Article> _defaultArticles = <Article>[
     summary: 'Raise work density safely while keeping movement quality high.',
     content:
         'Use blocks of 8-12 minutes and keep transitions short.\n\nTrack total rounds completed, then increase round quality before adding more time.',
-    imageUrl: _kDefaultArticleImage,
+    imageUrl: _kImgCardio,
     authorId: 'coach_ari',
     tags: ['conditioning', 'core', 'progression'],
     machineIds: const <String>[],
@@ -326,7 +339,7 @@ final List<Article> _defaultArticles = <Article>[
     summary: 'Three technical standards we are enforcing on the gym floor.',
     content:
         '1) Controlled eccentrics on machine presses.\n2) Full lockout and scapular movement on pulls.\n3) Bracing before every heavy rep.',
-    imageUrl: _kDefaultArticleImage,
+    imageUrl: _kImgTechnique,
     authorId: 'owner_lift',
     tags: ['coach tips', 'technique'],
     machineIds: const <String>[],
@@ -342,7 +355,7 @@ final List<Article> _defaultArticles = <Article>[
     summary: 'Internal coach draft for warmup sequencing.',
     content:
         'This draft is intentionally unpublished and should only appear to non-member roles.',
-    imageUrl: _kDefaultArticleImage,
+    imageUrl: _kImgKettlebell,
     authorId: 'coach_nia',
     tags: ['shoulders', 'warmup'],
     machineIds: const <String>[],

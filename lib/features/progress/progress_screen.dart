@@ -1,20 +1,31 @@
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:lift/app/theme.dart';
+import 'package:lift/shared/icons/mynaui_glyphs.dart';
+import 'package:lift/shared/icons/mynaui_icon.dart';
+import 'package:lift/features/settings/settings_screen.dart';
+import 'package:lift/features/progress/workout_history_detail_page.dart';
+import 'package:lift/shared/exercise_demo_images.dart';
 import 'package:lift/shared/models/workout_history_entry.dart';
 import 'package:lift/shared/services/health_sync_service.dart';
+import 'package:lift/shared/widgets/lift_floating_island.dart';
+import 'package:lift/shared/widgets/lift_island_header.dart';
+import 'package:lift/shared/widgets/lift_menu_sheet.dart';
+import 'package:lift/shared/widgets/lift_pressable.dart';
+import 'package:lift/shared/widgets/scroll_linked_top_blur_scrim.dart';
 import 'package:lift/shared/widgets/surfaces.dart';
-
-const String _kExercisePlaceholderImageUrl =
-    'https://blocks.astratic.com/img/general-img-landscape.png';
+import 'package:shared_preferences/shared_preferences.dart';
 
 enum _ProgressRange { week, month, quarter, custom }
 
 enum _ProgressMetric { volume, reps, duration }
 
 enum _ProgressSectionId {
+  trainingScore,
   recovery,
+  activity,
   insight,
   performance,
   machineAnalytics,
@@ -26,7 +37,9 @@ enum _ProgressSectionId {
 
 const List<_ProgressSectionId> _kDefaultProgressSectionOrder =
     <_ProgressSectionId>[
+      _ProgressSectionId.trainingScore,
       _ProgressSectionId.recovery,
+      _ProgressSectionId.activity,
       _ProgressSectionId.insight,
       _ProgressSectionId.performance,
       _ProgressSectionId.machineAnalytics,
@@ -36,17 +49,177 @@ const List<_ProgressSectionId> _kDefaultProgressSectionOrder =
       _ProgressSectionId.conditioning,
     ];
 
+const List<_ProgressSectionId> _kRecoveryFocusSectionOrder =
+    <_ProgressSectionId>[
+      _ProgressSectionId.recovery,
+      _ProgressSectionId.muscleBalance,
+    ];
+
+const String _kProgressSectionOrderStorageKey = 'progress_section_order_v1';
+const String _kProgressVisibleSectionsStorageKey =
+    'progress_visible_sections_v1';
+
+const Color kProgressCanvasColor = Color(0xFFF2F2F7);
+
+class ProgressArrangeController {
+  VoidCallback? _showAddTileSheet;
+  VoidCallback? _exitArrangeMode;
+
+  void bind({
+    required VoidCallback showAddTileSheet,
+    required VoidCallback exitArrangeMode,
+  }) {
+    _showAddTileSheet = showAddTileSheet;
+    _exitArrangeMode = exitArrangeMode;
+  }
+
+  void unbind() {
+    _showAddTileSheet = null;
+    _exitArrangeMode = null;
+  }
+
+  bool showAddTileSheet() {
+    final callback = _showAddTileSheet;
+    if (callback == null) return false;
+    callback();
+    return true;
+  }
+
+  bool exitArrangeMode() {
+    final callback = _exitArrangeMode;
+    if (callback == null) return false;
+    callback();
+    return true;
+  }
+}
+
+extension _ProgressSectionIdUi on _ProgressSectionId {
+  String get label {
+    switch (this) {
+      case _ProgressSectionId.trainingScore:
+        return 'Training score';
+      case _ProgressSectionId.recovery:
+        return 'Recovery stats';
+      case _ProgressSectionId.activity:
+        return 'Activity';
+      case _ProgressSectionId.insight:
+        return 'Smart insight';
+      case _ProgressSectionId.performance:
+        return 'Performance';
+      case _ProgressSectionId.machineAnalytics:
+        return 'Machine analytics';
+      case _ProgressSectionId.exerciseAssessments:
+        return 'Exercise trends';
+      case _ProgressSectionId.consistency:
+        return 'Consistency';
+      case _ProgressSectionId.muscleBalance:
+        return 'Muscle balance';
+      case _ProgressSectionId.conditioning:
+        return 'Bodyweight + conditioning';
+    }
+  }
+
+  String get subtitle {
+    switch (this) {
+      case _ProgressSectionId.trainingScore:
+        return 'Score breakdown and confidence.';
+      case _ProgressSectionId.recovery:
+        return 'Readiness, health data, and recovery.';
+      case _ProgressSectionId.activity:
+        return 'Completed workouts and recent sessions.';
+      case _ProgressSectionId.insight:
+        return 'AI-style coaching summary for this range.';
+      case _ProgressSectionId.performance:
+        return 'Trend chart across the selected metric.';
+      case _ProgressSectionId.machineAnalytics:
+        return 'Strength progress across your top machines.';
+      case _ProgressSectionId.exerciseAssessments:
+        return 'Session-by-session movement trends.';
+      case _ProgressSectionId.consistency:
+        return 'Streak, completion, and heatmap activity.';
+      case _ProgressSectionId.muscleBalance:
+        return 'Push/pull workload distribution.';
+      case _ProgressSectionId.conditioning:
+        return 'Bodyweight work and conditioning output.';
+    }
+  }
+
+  IconData get icon {
+    switch (this) {
+      case _ProgressSectionId.trainingScore:
+        return Icons.stacked_line_chart_rounded;
+      case _ProgressSectionId.recovery:
+        return Icons.favorite_outline_rounded;
+      case _ProgressSectionId.activity:
+        return Icons.history_rounded;
+      case _ProgressSectionId.insight:
+        return Icons.auto_awesome_rounded;
+      case _ProgressSectionId.performance:
+        return Icons.show_chart_rounded;
+      case _ProgressSectionId.machineAnalytics:
+        return Icons.fitness_center_rounded;
+      case _ProgressSectionId.exerciseAssessments:
+        return Icons.insights_rounded;
+      case _ProgressSectionId.consistency:
+        return Icons.calendar_month_rounded;
+      case _ProgressSectionId.muscleBalance:
+        return Icons.balance_rounded;
+      case _ProgressSectionId.conditioning:
+        return Icons.directions_run_rounded;
+    }
+  }
+}
+
+_ProgressSectionId? _progressSectionIdFromName(String raw) {
+  for (final value in _ProgressSectionId.values) {
+    if (value.name == raw) return value;
+  }
+  return null;
+}
+
+Color _trainingScoreAccentColor(int score) {
+  return _scoreSignalColor(score / 100);
+}
+
+Color _scoreSignalColor(double ratio) {
+  final normalized = ratio.clamp(0.0, 1.0);
+  if (normalized >= 0.75) return Colors.green.shade700;
+  if (normalized >= 0.45) return Colors.orange.shade700;
+  return Colors.red.shade600;
+}
+
+String _trainingScoreStatus(int score) {
+  if (score >= 80) return 'Strong momentum';
+  if (score >= 65) return 'Building well';
+  if (score >= 50) return 'Needs consistency';
+  return 'Reset and recover';
+}
+
 class ProgressScreen extends StatefulWidget {
   const ProgressScreen({
     super.key,
     this.extraBottomInset = 0,
     this.history = const <WorkoutHistoryEntry>[],
     this.onArrangeModeChanged,
+    this.onLeadingTap,
+    this.arrangeController,
+    this.headerTitle,
+    this.showBack = false,
+    this.showProfileAction = true,
+    this.onProfileTap,
+    this.recoveryFocusMode = false,
   });
 
   final double extraBottomInset;
   final List<WorkoutHistoryEntry> history;
   final ValueChanged<bool>? onArrangeModeChanged;
+  final VoidCallback? onLeadingTap;
+  final ProgressArrangeController? arrangeController;
+  final String? headerTitle;
+  final bool showBack;
+  final bool showProfileAction;
+  final VoidCallback? onProfileTap;
+  final bool recoveryFocusMode;
 
   @override
   State<ProgressScreen> createState() => _ProgressScreenState();
@@ -59,7 +232,11 @@ class _ProgressScreenState extends State<ProgressScreen>
   final HealthSyncService _healthSyncService = const MockHealthSyncService();
   bool _isReorderMode = false;
   late List<_ProgressSectionId> _sectionOrder;
+  late Set<_ProgressSectionId> _visibleSections;
   late final AnimationController _jiggleController;
+  final ScrollController _progressScrollController = ScrollController();
+  final Map<_ProgressSectionId, GlobalKey> _sectionKeys =
+      <_ProgressSectionId, GlobalKey>{};
 
   @override
   void initState() {
@@ -68,9 +245,31 @@ class _ProgressScreenState extends State<ProgressScreen>
       vsync: this,
       duration: const Duration(milliseconds: 190),
     );
-    _sectionOrder = List<_ProgressSectionId>.from(
-      _kDefaultProgressSectionOrder,
+    final initialSections =
+        widget.recoveryFocusMode
+            ? _kRecoveryFocusSectionOrder
+            : _kDefaultProgressSectionOrder;
+    _sectionOrder = List<_ProgressSectionId>.from(initialSections);
+    _visibleSections = initialSections.toSet();
+    widget.arrangeController?.bind(
+      showAddTileSheet: _showAddSectionSheet,
+      exitArrangeMode: _exitReorderMode,
     );
+    if (!widget.recoveryFocusMode) {
+      _loadSectionLayout();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant ProgressScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.arrangeController != widget.arrangeController) {
+      oldWidget.arrangeController?.unbind();
+      widget.arrangeController?.bind(
+        showAddTileSheet: _showAddSectionSheet,
+        exitArrangeMode: _exitReorderMode,
+      );
+    }
   }
 
   @override
@@ -78,7 +277,9 @@ class _ProgressScreenState extends State<ProgressScreen>
     if (_isReorderMode) {
       widget.onArrangeModeChanged?.call(false);
     }
+    widget.arrangeController?.unbind();
     _jiggleController.dispose();
+    _progressScrollController.dispose();
     super.dispose();
   }
 
@@ -98,7 +299,67 @@ class _ProgressScreenState extends State<ProgressScreen>
 
   void _exitReorderMode() => _setReorderMode(false);
 
-  List<_ProgressSectionId> _effectiveSectionOrder() {
+  Future<void> _loadSectionLayout() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final rawOrder = prefs.getStringList(_kProgressSectionOrderStorageKey);
+      final rawVisible = prefs.getStringList(
+        _kProgressVisibleSectionsStorageKey,
+      );
+      if (rawOrder == null && rawVisible == null) return;
+
+      final normalizedOrder = <_ProgressSectionId>[
+        if (rawOrder != null)
+          ...rawOrder
+              .map(_progressSectionIdFromName)
+              .whereType<_ProgressSectionId>(),
+      ];
+      if (normalizedOrder.isEmpty) {
+        normalizedOrder.addAll(_kDefaultProgressSectionOrder);
+      }
+
+      final visibleSections =
+          rawVisible == null
+              ? _kDefaultProgressSectionOrder.toSet()
+              : rawVisible
+                  .map(_progressSectionIdFromName)
+                  .whereType<_ProgressSectionId>()
+                  .toSet();
+
+      if (!mounted) return;
+      setState(() {
+        _sectionOrder = normalizedOrder;
+        _visibleSections =
+            visibleSections.isEmpty
+                ? _kDefaultProgressSectionOrder.toSet()
+                : visibleSections;
+      });
+    } catch (_) {
+      // Keep page usable if local section preferences fail to load.
+    }
+  }
+
+  Future<void> _persistSectionLayout() async {
+    if (widget.recoveryFocusMode) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        _kProgressSectionOrderStorageKey,
+        _normalizedSectionOrder().map((id) => id.name).toList(growable: false),
+      );
+      await prefs.setStringList(
+        _kProgressVisibleSectionsStorageKey,
+        _visibleSections.map((id) => id.name).toList(growable: false),
+      );
+    } catch (_) {
+      // Non-fatal local persistence failure.
+    }
+  }
+
+  List<_ProgressSectionId> _normalizedSectionOrder() {
+    if (widget.recoveryFocusMode) {
+      return List<_ProgressSectionId>.from(_kRecoveryFocusSectionOrder);
+    }
     final seen = <_ProgressSectionId>{};
     final normalized = <_ProgressSectionId>[];
     for (final id in _sectionOrder) {
@@ -114,23 +375,169 @@ class _ProgressScreenState extends State<ProgressScreen>
     return normalized;
   }
 
+  List<_ProgressSectionId> _effectiveSectionOrder() {
+    final normalized = _normalizedSectionOrder();
+    return normalized.where(_visibleSections.contains).toList(growable: false);
+  }
+
+  List<_ProgressSectionId> _hiddenSections() {
+    return _normalizedSectionOrder()
+        .where((id) => !_visibleSections.contains(id))
+        .toList(growable: false);
+  }
+
   void _onSectionReorder(int oldIndex, int newIndex) {
+    final visibleOrder = _effectiveSectionOrder().toList(growable: true);
+    if (oldIndex < 0 || oldIndex >= visibleOrder.length) return;
     setState(() {
       var insertAt = newIndex;
       if (newIndex > oldIndex) {
         insertAt -= 1;
       }
-      final moved = _sectionOrder.removeAt(oldIndex);
-      _sectionOrder.insert(insertAt, moved);
+      insertAt = insertAt.clamp(0, visibleOrder.length - 1);
+      final moved = visibleOrder.removeAt(oldIndex);
+      visibleOrder.insert(insertAt, moved);
+      final hiddenOrder = _hiddenSections();
+      _sectionOrder = <_ProgressSectionId>[...visibleOrder, ...hiddenOrder];
     });
+    _persistSectionLayout();
+  }
+
+  void _removeSection(_ProgressSectionId sectionId) {
+    if (!_visibleSections.contains(sectionId)) return;
+    setState(() => _visibleSections.remove(sectionId));
+    _persistSectionLayout();
+  }
+
+  void _addSection(_ProgressSectionId sectionId) {
+    if (_visibleSections.contains(sectionId)) return;
+    setState(() {
+      _visibleSections.add(sectionId);
+      if (!_sectionOrder.contains(sectionId)) {
+        _sectionOrder.add(sectionId);
+      }
+    });
+    _persistSectionLayout();
+  }
+
+  GlobalKey _sectionKey(_ProgressSectionId sectionId) {
+    return _sectionKeys.putIfAbsent(sectionId, () => GlobalKey());
+  }
+
+  void _scrollToSection(_ProgressSectionId sectionId) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final context = _sectionKey(sectionId).currentContext;
+      if (context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: LiftMotion.standard,
+        curve: LiftMotion.enterCurve,
+        alignment: 0.08,
+      );
+    });
+  }
+
+  Future<void> _showAddSectionSheet() async {
+    final allSections = _normalizedSectionOrder();
+    final selectedSection = await showModalBottomSheet<_ProgressSectionId>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.24),
+      builder: (sheetContext) {
+        final viewportHeight = MediaQuery.sizeOf(sheetContext).height;
+        final listHeight = (viewportHeight * 0.52).clamp(280.0, 560.0);
+        return Align(
+          alignment: Alignment.bottomCenter,
+          child: SafeArea(
+            top: false,
+            bottom: false,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: viewportHeight * 0.74),
+              child: LiftMenuSheet(
+                title: 'Add tiles',
+                subtitle:
+                    'Choose which Progress tiles appear on the page. Tiles already showing are marked below.',
+                children: [
+                  SizedBox(
+                    height: listHeight,
+                    child: ListView.separated(
+                      padding: EdgeInsets.zero,
+                      physics: const ClampingScrollPhysics(),
+                      itemCount: allSections.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final sectionId = allSections[index];
+                        final isVisible = _visibleSections.contains(sectionId);
+                        final subtitle =
+                            isVisible
+                                ? '${sectionId.subtitle} Already on your page.'
+                                : sectionId.subtitle;
+                        return Opacity(
+                          opacity: isVisible ? 0.6 : 1,
+                          child: IgnorePointer(
+                            ignoring: isVisible,
+                            child: LiftMenuActionTile(
+                              icon:
+                                  isVisible
+                                      ? MynauiIcon(
+                                        MynauiGlyphs.checkUnread,
+                                        size: 22,
+                                        color: Colors.grey.shade500,
+                                      )
+                                      : sectionId ==
+                                          _ProgressSectionId.consistency
+                                      ? MynauiIcon(
+                                        MynauiGlyphs.calendarMark,
+                                        size: 22,
+                                        color: kRecoveryMidColor,
+                                      )
+                                      : Icon(sectionId.icon),
+                              title: sectionId.label,
+                              subtitle: subtitle,
+                              accent:
+                                  isVisible
+                                      ? Colors.grey.shade500
+                                      : kRecoveryMidColor,
+                              showChevron: !isVisible,
+                              onTap: () {
+                                Navigator.pop(sheetContext, sectionId);
+                              },
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    if (!mounted || selectedSection == null) return;
+    _addSection(selectedSection);
+    _scrollToSection(selectedSection);
   }
 
   Widget _buildSectionById(
     _ProgressSectionId sectionId,
-    _ProgressAnalytics analytics,
-  ) {
+    _ProgressAnalytics analytics, {
+    int sectionIndex = 0,
+    List<WorkoutHistoryEntry> allHistory = const <WorkoutHistoryEntry>[],
+  }) {
+    final useFirstSectionCorners = sectionIndex == 0;
     return switch (sectionId) {
+      _ProgressSectionId.trainingScore => _TrainingScoreHero(
+        gymScore: analytics.gymScore,
+        customBorderRadius:
+            useFirstSectionCorners ? kProgressFirstSectionRadius : null,
+      ),
       _ProgressSectionId.recovery => _RecoverySection(
+        customBorderRadius:
+            useFirstSectionCorners ? kProgressFirstSectionRadius : null,
         readinessScore: analytics.readinessScore,
         recoveryLabel: analytics.recoveryLabel,
         averageRecoveryHours: analytics.avgRecoveryHours,
@@ -143,8 +550,35 @@ class _ProgressScreenState extends State<ProgressScreen>
         sleepMinutes: analytics.sleepMinutes,
         sourceLabel: analytics.healthDataSourceLabel,
       ),
-      _ProgressSectionId.insight => _InsightCard(text: analytics.insightText),
+      _ProgressSectionId.activity => _ActivitySection(
+        customBorderRadius:
+            useFirstSectionCorners ? kProgressFirstSectionRadius : null,
+        entries: analytics.recentWorkouts,
+        completedWorkouts: analytics.completedWorkoutsInRange,
+        totalMinutes: analytics.totalMinutesInRange,
+        totalVolumeKg: analytics.totalVolumeInRange,
+        selectedRange: _selectedRange,
+        onSeeAll: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder:
+                  (_) => _WorkoutHistoryPage(
+                    entries: allHistory.reversed.toList(growable: false),
+                    selectedRange: _selectedRange,
+                  ),
+            ),
+          );
+        },
+      ),
+      _ProgressSectionId.insight => _InsightCard(
+        text: analytics.insightText,
+        customBorderRadius:
+            useFirstSectionCorners ? kProgressFirstSectionRadius : null,
+      ),
       _ProgressSectionId.performance => _PerformanceSection(
+        customBorderRadius:
+            useFirstSectionCorners ? kProgressFirstSectionRadius : null,
         selectedRange: _selectedRange,
         selectedMetric: _selectedMetric,
         series: analytics.series,
@@ -161,23 +595,33 @@ class _ProgressScreenState extends State<ProgressScreen>
         },
       ),
       _ProgressSectionId.machineAnalytics => _MachineAnalyticsSection(
+        customBorderRadius:
+            useFirstSectionCorners ? kProgressFirstSectionRadius : null,
         machineStats: analytics.machineStats,
       ),
       _ProgressSectionId.exerciseAssessments => _ExerciseAssessmentSection(
+        customBorderRadius:
+            useFirstSectionCorners ? kProgressFirstSectionRadius : null,
         assessments: analytics.exerciseAssessments,
       ),
       _ProgressSectionId.consistency => _ConsistencySection(
+        customBorderRadius:
+            useFirstSectionCorners ? kProgressFirstSectionRadius : null,
         streakDays: analytics.streakDays,
         weeklyCompletionPercent: analytics.weeklyCompletionPercent,
         trainingScore: analytics.trainingScore,
         heatmapShades: analytics.heatmapShades,
       ),
       _ProgressSectionId.muscleBalance => _MuscleBalanceSection(
+        customBorderRadius:
+            useFirstSectionCorners ? kProgressFirstSectionRadius : null,
         pushRatio: analytics.pushRatio,
         pullRatio: analytics.pullRatio,
         recoveryLabel: analytics.recoveryLabel,
       ),
       _ProgressSectionId.conditioning => _ConditioningSection(
+        customBorderRadius:
+            useFirstSectionCorners ? kProgressFirstSectionRadius : null,
         pullupReps: analytics.pullupReps,
         bodyweightReps: analytics.bodyweightReps,
         conditioningDurationLabel: analytics.conditioningDurationLabel,
@@ -1021,6 +1465,15 @@ class _ProgressScreenState extends State<ProgressScreen>
       trendPercent: trendPercent,
       ratio: ratio,
     );
+    final recentWorkouts = allSorted.reversed.take(4).toList(growable: false);
+    final totalMinutesInRange = rangeEntries.fold<int>(
+      0,
+      (sum, entry) => sum + entry.duration.inMinutes,
+    );
+    final totalVolumeInRange = rangeEntries.fold<double>(
+      0,
+      (sum, entry) => sum + entry.totalVolumeKg,
+    );
 
     return _ProgressAnalytics(
       insightText: insightText,
@@ -1052,6 +1505,10 @@ class _ProgressScreenState extends State<ProgressScreen>
       pullupReps: _pullupReps(rangeEntries),
       conditioningDurationLabel: _conditioningDurationLabel(rangeEntries),
       hasData: rangeEntries.isNotEmpty,
+      recentWorkouts: recentWorkouts,
+      completedWorkoutsInRange: rangeEntries.length,
+      totalMinutesInRange: totalMinutesInRange,
+      totalVolumeInRange: totalVolumeInRange,
     );
   }
 
@@ -1087,134 +1544,335 @@ class _ProgressScreenState extends State<ProgressScreen>
     final allSorted = _sortedHistory();
     final rangeEntries = _entriesInSelectedRange(allSorted);
     final analytics = _buildAnalytics(allSorted, rangeEntries);
-    final baseBottomInset = _isReorderMode ? 96.0 : 104.0;
+    const baseBottomInset = 12.0;
     final bottomInset = baseBottomInset + widget.extraBottomInset;
     final sectionOrder = _effectiveSectionOrder();
-    final mediaBottomInset = MediaQuery.paddingOf(context).bottom;
-    return SafeArea(
-      bottom: false,
-      child: Stack(
-        children: [
-          ReorderableListView(
-            padding: EdgeInsets.fromLTRB(16, 16, 16, bottomInset),
-            buildDefaultDragHandles: false,
-            onReorder: _onSectionReorder,
-            proxyDecorator: (child, index, animation) {
-              final curve = CurvedAnimation(
-                parent: animation,
-                curve: Curves.easeOutCubic,
-              );
-              return AnimatedBuilder(
-                animation: curve,
-                builder: (context, _) {
-                  final t = curve.value;
-                  final scale = 1.0 + (0.02 * t);
-                  return Transform.scale(
-                    scale: scale,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(22),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(
-                              alpha: 0.12 + (0.12 * t),
-                            ),
-                            blurRadius: 24 + (12 * t),
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                      ),
-                      child: child,
-                    ),
-                  );
-                },
-              );
-            },
-            header: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 2),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onLongPress: _enterReorderMode,
-                  child: _TrainingScoreHero(gymScore: analytics.gymScore),
+    final topInset = MediaQuery.paddingOf(context).top;
+    const islandTop = 16.0;
+    const progressHeaderGap = 10.0;
+    const progressHeaderSpacer = 4.0;
+
+    /// Space reserved for status bar + floating island + gap (scrim + header).
+    final listTopPadding =
+        topInset + islandTop + kLiftIslandHeaderHeight + progressHeaderGap;
+
+    /// Align list content with that inset so titles never sit under the opaque
+    /// island. The blur band still extends below this so the hero top can read
+    /// frosted when scrolled slightly.
+    final listScrollTopPadding = listTopPadding;
+    final topBlurBandHeight = listTopPadding + 88.0;
+
+    /// Slightly off-white so [BackdropFilter] on the scrim + island has
+    /// something to blur (pure white parent makes glass read as flat paint).
+    return Material(
+      color: kProgressCanvasColor,
+      child: SafeArea(
+        top: false,
+        bottom: false,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // List paints first so [BackdropFilter] in the scrim blurs live content.
+            Positioned.fill(
+              child: ReorderableListView(
+                scrollController: _progressScrollController,
+                primary: false,
+                physics: const ClampingScrollPhysics(),
+                padding: EdgeInsets.fromLTRB(
+                  kPagePadding,
+                  listScrollTopPadding,
+                  kPagePadding,
+                  bottomInset,
                 ),
-                const SizedBox(height: 10),
-                if (_isReorderMode)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4, bottom: 4),
-                    child: Text(
-                      'Arrange mode: drag cards to reorder',
-                      style: TextStyle(
-                        color: Colors.grey.shade700,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 10),
-              ],
-            ),
-            footer: null,
-            children: List<Widget>.generate(sectionOrder.length, (index) {
-              final sectionId = sectionOrder[index];
-              final baseChild = _buildSectionById(sectionId, analytics);
-              Widget reorderableChild;
-              if (_isReorderMode) {
-                reorderableChild = ReorderableDelayedDragStartListener(
-                  index: index,
-                  child: AnimatedBuilder(
-                    animation: _jiggleController,
-                    child: baseChild,
-                    builder: (context, child) {
-                      final wave = (0.004 + (_jiggleController.value * 0.008));
-                      final angle = index.isEven ? wave : -wave;
-                      return Transform.rotate(
-                        angle: angle,
-                        alignment: Alignment.center,
-                        child: child,
+                buildDefaultDragHandles: false,
+                onReorder: _onSectionReorder,
+                proxyDecorator: (child, index, animation) {
+                  final curve = CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  );
+                  return AnimatedBuilder(
+                    animation: curve,
+                    builder: (context, _) {
+                      final t = curve.value;
+                      final scale = 1.0 + (0.02 * t);
+                      return Transform.scale(
+                        scale: scale,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(
+                              kIosCornerRadius,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(
+                                  alpha: 0.12 + (0.12 * t),
+                                ),
+                                blurRadius: 24 + (12 * t),
+                                offset: const Offset(0, 10),
+                              ),
+                            ],
+                          ),
+                          child: child,
+                        ),
                       );
                     },
-                  ),
-                );
-              } else {
-                reorderableChild = GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onLongPress: _enterReorderMode,
-                  child: baseChild,
-                );
-              }
-              return Container(
-                key: ValueKey<String>('progress-section-${sectionId.name}'),
-                margin: const EdgeInsets.only(bottom: 14),
-                child: reorderableChild,
-              );
-            }),
-          ),
-          if (_isReorderMode)
+                  );
+                },
+                header: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 2),
+                    if (_isReorderMode)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 4, bottom: 4),
+                        child: Text(
+                          'Arrange mode: drag to reorder, tap + to add tiles, and use x to remove them.',
+                          style: TextStyle(
+                            color: Colors.grey.shade700,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: progressHeaderSpacer),
+                  ],
+                ),
+                footer: null,
+                children: List<Widget>.generate(sectionOrder.length, (index) {
+                  final sectionId = sectionOrder[index];
+                  final baseChild = _buildSectionById(
+                    sectionId,
+                    analytics,
+                    sectionIndex: index,
+                    allHistory: allSorted,
+                  );
+                  final removableChild =
+                      _isReorderMode
+                          ? _ReorderEditableTile(
+                            onRemove: () => _removeSection(sectionId),
+                            child: baseChild,
+                          )
+                          : baseChild;
+                  Widget reorderableChild;
+                  if (_isReorderMode) {
+                    reorderableChild = ReorderableDelayedDragStartListener(
+                      index: index,
+                      child: AnimatedBuilder(
+                        animation: _jiggleController,
+                        child: removableChild,
+                        builder: (context, child) {
+                          final wave =
+                              (0.004 + (_jiggleController.value * 0.008));
+                          final angle = index.isEven ? wave : -wave;
+                          return Transform.rotate(
+                            angle: angle,
+                            alignment: Alignment.center,
+                            child: child,
+                          );
+                        },
+                      ),
+                    );
+                  } else {
+                    reorderableChild =
+                        widget.recoveryFocusMode
+                            ? removableChild
+                            : GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onLongPress: _enterReorderMode,
+                              child: removableChild,
+                            );
+                  }
+                  return Container(
+                    key: _sectionKey(sectionId),
+                    margin: const EdgeInsets.only(bottom: 10),
+                    child: reorderableChild,
+                  );
+                }),
+              ),
+            ),
             Positioned(
-              right: 16,
-              bottom: widget.extraBottomInset + mediaBottomInset + 16,
-              child: SafeArea(
-                top: false,
-                bottom: false,
-                child: FilledButton(
-                  onPressed: _exitReorderMode,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: kAccentColor.withValues(alpha: 0.92),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 12,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(999),
-                    ),
+              top: 0,
+              left: 0,
+              right: 0,
+              height: topBlurBandHeight,
+              child: IgnorePointer(
+                child: const _ProgressTopGradientBlurScrim(),
+              ),
+            ),
+            Positioned(
+              top: topInset + islandTop,
+              left: kPagePadding,
+              right: kPagePadding,
+              child: LiftIslandHeader(
+                scrollController: _progressScrollController,
+                title: widget.headerTitle,
+                trailingSlotWidth: widget.showProfileAction ? 48 : 0,
+                leading: LiftIslandHeaderAction(
+                  onTap:
+                      widget.showBack
+                          ? (widget.onLeadingTap ??
+                              () => Navigator.of(context).pop())
+                          : (widget.onLeadingTap ?? () {}),
+                  child: MynauiIcon(
+                    widget.showBack
+                        ? MynauiGlyphs.altArrowLeft
+                        : MynauiGlyphs.qrCode,
+                    size:
+                        widget.showBack ? 22 : kLiftIslandHeaderLeadingIconSize,
+                    color: kLiftIslandOnFrosted,
                   ),
-                  child: const Text('Done'),
+                ),
+                trailing:
+                    widget.showProfileAction
+                        ? LiftIslandHeaderAction(
+                          onTap:
+                              widget.onProfileTap ??
+                              () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder:
+                                        (_) => SettingsScreen(
+                                          workoutHistory: widget.history,
+                                        ),
+                                  ),
+                                );
+                              },
+                          child: const MynauiIcon(
+                            MynauiGlyphs.userNoCircle,
+                            size: kLiftIslandHeaderTrailingIconSize,
+                            color: kLiftIslandOnFrosted,
+                          ),
+                        )
+                        : null,
+              ),
+            ),
+            if (_isReorderMode && !widget.recoveryFocusMode)
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: kShellFloatingNavBottomInset,
+                child: SafeArea(
+                  top: false,
+                  bottom: false,
+                  child: _ProgressArrangeBottomIsland(
+                    onAddTap: _showAddSectionSheet,
+                    onDoneTap: _exitReorderMode,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Neutral frosted blur behind status bar + header (no score-based colour tint).
+class _ProgressTopGradientBlurScrim extends StatelessWidget {
+  const _ProgressTopGradientBlurScrim();
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRect(
+      child: ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: featherTopBlurMask,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+              child: const ColoredBox(color: Color(0x00000000)),
+            ),
+            // Light veil so blur stays visible (heavy white reads as flat paint).
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.white.withValues(alpha: 0.38),
+                    Colors.white.withValues(alpha: 0.20),
+                    Colors.white.withValues(alpha: 0.07),
+                    Colors.white.withValues(alpha: 0.0),
+                  ],
+                  stops: const [0.0, 0.28, 0.58, 1.0],
                 ),
               ),
             ),
-        ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ProgressArrangeBottomIsland extends StatelessWidget {
+  const _ProgressArrangeBottomIsland({
+    required this.onAddTap,
+    required this.onDoneTap,
+  });
+
+  final VoidCallback onAddTap;
+  final VoidCallback onDoneTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: kLiftIslandHeaderHeight,
+      child: LiftFloatingIslandSurface(
+        borderRadius: 30,
+        backgroundColor: const Color(0xEAF7F7F7),
+        borderColor: const Color(0x12000000),
+        blurSigma: 24,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Row(
+            children: [
+              LiftPressable(
+                onTap: onAddTap,
+                borderRadius: kIosControlRadius,
+                pressedScale: LiftMotion.gentlePressScale,
+                child: SizedBox(
+                  width: 44,
+                  height: 40,
+                  child: Center(
+                    child: MynauiIcon(
+                      MynauiGlyphs.addCircle,
+                      size: 25,
+                      color: const Color(0xBF000000),
+                    ),
+                  ),
+                ),
+              ),
+              const Spacer(),
+              LiftPressable(
+                onTap: onDoneTap,
+                borderRadius: kIosControlRadius,
+                child: Ink(
+                  width: 148,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF111111),
+                    borderRadius: BorderRadius.circular(kIosControlRadius),
+                  ),
+                  child: Center(
+                    child: Text(
+                      'Done',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white.withValues(alpha: 0.96),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1251,6 +1909,10 @@ class _ProgressAnalytics {
     required this.pullupReps,
     required this.conditioningDurationLabel,
     required this.hasData,
+    required this.recentWorkouts,
+    required this.completedWorkoutsInRange,
+    required this.totalMinutesInRange,
+    required this.totalVolumeInRange,
   });
 
   final String insightText;
@@ -1282,6 +1944,10 @@ class _ProgressAnalytics {
   final int pullupReps;
   final String conditioningDurationLabel;
   final bool hasData;
+  final List<WorkoutHistoryEntry> recentWorkouts;
+  final int completedWorkoutsInRange;
+  final int totalMinutesInRange;
+  final double totalVolumeInRange;
 }
 
 class _GymScoreBreakdown {
@@ -1394,13 +2060,15 @@ class _ExerciseAssessment {
 }
 
 class _InsightCard extends StatelessWidget {
-  const _InsightCard({required this.text});
+  const _InsightCard({required this.text, this.customBorderRadius});
 
   final String text;
+  final BorderRadius? customBorderRadius;
 
   @override
   Widget build(BuildContext context) {
     return SectionBoundary(
+      customBorderRadius: customBorderRadius,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1409,7 +2077,7 @@ class _InsightCard extends StatelessWidget {
             height: 34,
             decoration: BoxDecoration(
               color: kAccentColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(kIosCornerRadius),
             ),
             child: const Icon(Icons.auto_awesome_rounded, color: kAccentColor),
           ),
@@ -1430,32 +2098,159 @@ class _InsightCard extends StatelessWidget {
   }
 }
 
+extension _ProgressRangeDisplay on _ProgressRange {
+  String get activityLabel {
+    switch (this) {
+      case _ProgressRange.week:
+        return 'Last 7 days';
+      case _ProgressRange.month:
+        return 'Last 30 days';
+      case _ProgressRange.quarter:
+        return 'Last 90 days';
+      case _ProgressRange.custom:
+        return 'All time';
+    }
+  }
+}
+
+class _ActivitySection extends StatelessWidget {
+  const _ActivitySection({
+    this.customBorderRadius,
+    required this.entries,
+    required this.completedWorkouts,
+    required this.totalMinutes,
+    required this.totalVolumeKg,
+    required this.selectedRange,
+    required this.onSeeAll,
+  });
+
+  final BorderRadius? customBorderRadius;
+  final List<WorkoutHistoryEntry> entries;
+  final int completedWorkouts;
+  final int totalMinutes;
+  final double totalVolumeKg;
+  final _ProgressRange selectedRange;
+  final VoidCallback onSeeAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final subtitleColor = Colors.grey.shade600;
+    final visibleEntries = entries.take(2).toList(growable: false);
+    return LiftPressable(
+      onTap: onSeeAll,
+      borderRadius: kIosCornerRadius,
+      pressedScale: LiftMotion.gentlePressScale,
+      child: SectionBoundary(
+        customBorderRadius: customBorderRadius,
+        padding: const EdgeInsets.all(15),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SectionHeaderRow(
+              title: 'Activity',
+              actionLabel: 'See all',
+              onActionTap: onSeeAll,
+            ),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$completedWorkouts completed workout${completedWorkouts == 1 ? '' : 's'}',
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.6,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${selectedRange.activityLabel} • $totalMinutes min trained • ${totalVolumeKg.toStringAsFixed(0)}kg moved',
+                        style: TextStyle(
+                          color: subtitleColor,
+                          fontSize: 13,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF181818),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Icon(
+                    Icons.history_rounded,
+                    color: Colors.white,
+                    size: 24,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            if (entries.isEmpty)
+              Text(
+                'Complete a workout to start building your activity history.',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontSize: 13,
+                  height: 1.35,
+                ),
+              )
+            else
+              Column(
+                children: [
+                  for (var i = 0; i < visibleEntries.length; i++) ...[
+                    _ActivityWorkoutRow(
+                      entry: visibleEntries[i],
+                      onTap:
+                          () => pushWorkoutHistoryDetailPage(
+                            context,
+                            entry: visibleEntries[i],
+                          ),
+                    ),
+                    if (i != visibleEntries.length - 1)
+                      Divider(
+                        height: 18,
+                        color: Theme.of(context).dividerTheme.color,
+                      ),
+                  ],
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _TrainingScoreHero extends StatelessWidget {
-  const _TrainingScoreHero({required this.gymScore});
+  const _TrainingScoreHero({required this.gymScore, this.customBorderRadius});
 
   final _GymScoreBreakdown gymScore;
-
-  Color _scoreColor(int score) {
-    if (score >= 80) return Colors.green.shade700;
-    if (score >= 65) return kAccentColor;
-    if (score >= 50) return Colors.orange.shade700;
-    return Colors.red.shade600;
-  }
-
-  String _scoreStatus(int score) {
-    if (score >= 80) return 'Strong momentum';
-    if (score >= 65) return 'Building well';
-    if (score >= 50) return 'Needs consistency';
-    return 'Reset and recover';
-  }
+  final BorderRadius? customBorderRadius;
 
   @override
   Widget build(BuildContext context) {
     final score = gymScore.totalScore.clamp(0, 100);
-    final scoreColor = _scoreColor(score);
+    final scoreColor = _trainingScoreAccentColor(score);
+    final workoutRatio = gymScore.workoutPoints / 50;
+    final recoveryRatio = gymScore.recoveryPoints / 25;
+    final consistencyRatio = gymScore.consistencyPoints / 15;
+    final loadQualityRatio = gymScore.loadQualityPoints / 10;
+    final borderRadius =
+        customBorderRadius ?? BorderRadius.circular(kIosCornerRadius);
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: borderRadius,
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -1463,88 +2258,145 @@ class _TrainingScoreHero extends StatelessWidget {
         ),
         border: Border.all(color: scoreColor.withValues(alpha: 0.25)),
       ),
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const _SectionHeaderRow(title: 'Training score'),
+          const SizedBox(height: 12),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Training score',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
                     Text(
-                      _scoreStatus(score),
+                      _trainingScoreStatus(score),
                       style: TextStyle(
                         color: scoreColor,
+                        fontSize: 14,
                         fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Training score blends workout quality, recovery, and consistency.',
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        fontSize: 13,
+                        height: 1.35,
                       ),
                     ),
                   ],
                 ),
               ),
-              Container(
-                width: 92,
-                height: 92,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white,
-                  border: Border.all(
-                    color: scoreColor.withValues(alpha: 0.35),
-                    width: 3,
-                  ),
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  '$score',
-                  style: TextStyle(
-                    color: scoreColor,
-                    fontSize: 30,
-                    fontWeight: FontWeight.w800,
-                  ),
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 112,
+                height: 112,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    SizedBox(
+                      width: 112,
+                      height: 112,
+                      child: CircularProgressIndicator(
+                        value: score / 100,
+                        strokeWidth: 6,
+                        backgroundColor: Colors.grey.shade300,
+                        valueColor: AlwaysStoppedAnimation<Color>(scoreColor),
+                      ),
+                    ),
+                    Container(
+                      width: 88,
+                      height: 88,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white,
+                      ),
+                      alignment: Alignment.center,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '$score%',
+                            style: TextStyle(
+                              color: scoreColor,
+                              fontSize: 26,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.6,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            'Daily max is 100. Integrations improve score confidence, not the score ceiling.',
-            style: TextStyle(color: Colors.grey.shade700, height: 1.35),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+          const SizedBox(height: 16),
+          Row(
             children: [
-              _ScoreChip(
-                label: 'Workout',
-                value: '${gymScore.workoutPoints}/50',
+              Expanded(
+                child: _ScoreBreakdownBar(
+                  label: 'Workout',
+                  value: gymScore.workoutPoints,
+                  max: 50,
+                  color: _scoreSignalColor(workoutRatio),
+                ),
               ),
-              _ScoreChip(
-                label: 'Recovery',
-                value: '${gymScore.recoveryPoints}/25',
-              ),
-              _ScoreChip(
-                label: 'Consistency',
-                value: '${gymScore.consistencyPoints}/15',
-              ),
-              _ScoreChip(
-                label: 'Load quality',
-                value: '${gymScore.loadQualityPoints}/10',
-              ),
-              _ScoreChip(
-                label: 'Confidence',
-                value: '${gymScore.confidenceScore}%',
+              const SizedBox(width: 10),
+              Expanded(
+                child: _ScoreBreakdownBar(
+                  label: 'Recovery',
+                  value: gymScore.recoveryPoints,
+                  max: 25,
+                  color: _scoreSignalColor(recoveryRatio),
+                ),
               ),
             ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _ScoreBreakdownBar(
+                  label: 'Consistency',
+                  value: gymScore.consistencyPoints,
+                  max: 15,
+                  color: _scoreSignalColor(consistencyRatio),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _ScoreBreakdownBar(
+                  label: 'Load quality',
+                  value: gymScore.loadQualityPoints,
+                  max: 10,
+                  color: _scoreSignalColor(loadQualityRatio),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Confidence ${gymScore.confidenceScore}%',
+            style: TextStyle(
+              color: Colors.grey.shade700,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Integrations improve score confidence, not the score ceiling.',
+            style: TextStyle(
+              color: Colors.grey.shade600,
+              fontSize: 12.5,
+              height: 1.35,
+            ),
           ),
         ],
       ),
@@ -1552,35 +2404,109 @@ class _TrainingScoreHero extends StatelessWidget {
   }
 }
 
-class _ScoreChip extends StatelessWidget {
-  const _ScoreChip({required this.label, required this.value});
+class _SectionHeaderRow extends StatelessWidget {
+  const _SectionHeaderRow({
+    required this.title,
+    this.actionLabel,
+    this.onActionTap,
+  });
 
-  final String label;
-  final String value;
+  final String title;
+  final String? actionLabel;
+  final VoidCallback? onActionTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.9),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      child: Text(
-        '$label: $value',
-        style: TextStyle(
-          color: Colors.grey.shade800,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
+    final hasAction = actionLabel != null && actionLabel!.trim().isNotEmpty;
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
         ),
-      ),
+        if (hasAction)
+          LiftPressable(
+            onTap: onActionTap,
+            borderRadius: kIosCornerRadius,
+            pressedScale: LiftMotion.gentlePressScale,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Text(
+                actionLabel!,
+                style: TextStyle(
+                  color: kAccentColor,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ScoreBreakdownBar extends StatelessWidget {
+  const _ScoreBreakdownBar({
+    required this.label,
+    required this.value,
+    required this.max,
+    required this.color,
+  });
+
+  final String label;
+  final int value;
+  final int max;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final ratio = max <= 0 ? 0.0 : (value / max).clamp(0.0, 1.0);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            Text(
+              '$value/$max',
+              style: TextStyle(
+                color: Colors.grey.shade800,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: LinearProgressIndicator(
+            value: ratio,
+            minHeight: 4,
+            backgroundColor: Colors.grey.shade300,
+            valueColor: AlwaysStoppedAnimation<Color>(color),
+          ),
+        ),
+      ],
     );
   }
 }
 
 class _PerformanceSection extends StatelessWidget {
   const _PerformanceSection({
+    this.customBorderRadius,
     required this.selectedRange,
     required this.selectedMetric,
     required this.series,
@@ -1599,6 +2525,7 @@ class _PerformanceSection extends StatelessWidget {
   final int prCount;
   final ValueChanged<_ProgressRange?> onRangeChanged;
   final ValueChanged<_ProgressMetric?> onMetricChanged;
+  final BorderRadius? customBorderRadius;
 
   @override
   Widget build(BuildContext context) {
@@ -1606,12 +2533,13 @@ class _PerformanceSection extends StatelessWidget {
         '${trendPercent >= 0 ? '+' : ''}${trendPercent.toStringAsFixed(1)}%';
 
     return SectionBoundary(
+      customBorderRadius: customBorderRadius,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
             'Performance trends',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -1682,7 +2610,7 @@ class _PerformanceSection extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
             decoration: BoxDecoration(
               color: Colors.grey.shade50,
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(kIosCornerRadius),
               border: Border.all(color: Colors.grey.shade200),
             ),
             child: CustomPaint(
@@ -1714,8 +2642,12 @@ class _PerformanceSection extends StatelessWidget {
 }
 
 class _MachineAnalyticsSection extends StatelessWidget {
-  const _MachineAnalyticsSection({required this.machineStats});
+  const _MachineAnalyticsSection({
+    this.customBorderRadius,
+    required this.machineStats,
+  });
 
+  final BorderRadius? customBorderRadius;
   final List<_MachineProgressStat> machineStats;
 
   @override
@@ -1723,12 +2655,14 @@ class _MachineAnalyticsSection extends StatelessWidget {
     final machines = machineStats;
 
     return SectionBoundary(
+      customBorderRadius: customBorderRadius,
+      padding: const EdgeInsets.all(15),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
             'Machine analytics',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 10),
           if (machines.isEmpty)
@@ -1758,8 +2692,12 @@ class _MachineAnalyticsSection extends StatelessWidget {
 }
 
 class _ExerciseAssessmentSection extends StatelessWidget {
-  const _ExerciseAssessmentSection({required this.assessments});
+  const _ExerciseAssessmentSection({
+    this.customBorderRadius,
+    required this.assessments,
+  });
 
+  final BorderRadius? customBorderRadius;
   final List<_ExerciseAssessment> assessments;
 
   String _formatWeight(double value) {
@@ -1770,12 +2708,14 @@ class _ExerciseAssessmentSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SectionBoundary(
+      customBorderRadius: customBorderRadius,
+      padding: const EdgeInsets.all(15),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
             'Exercise assessments',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 10),
           if (assessments.isEmpty)
@@ -1794,7 +2734,7 @@ class _ExerciseAssessmentSection extends StatelessWidget {
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
                     color: Colors.grey.shade50,
-                    borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(kIosCornerRadius),
                     border: Border.all(color: Colors.grey.shade200),
                   ),
                   child: Column(
@@ -1820,7 +2760,9 @@ class _ExerciseAssessmentSection extends StatelessWidget {
                               color: assessment.trend.color.withValues(
                                 alpha: 0.12,
                               ),
-                              borderRadius: BorderRadius.circular(999),
+                              borderRadius: BorderRadius.circular(
+                                kIosCornerRadius,
+                              ),
                               border: Border.all(
                                 color: assessment.trend.color.withValues(
                                   alpha: 0.28,
@@ -1887,6 +2829,7 @@ class _ExerciseAssessmentSection extends StatelessWidget {
 
 class _RecoverySection extends StatelessWidget {
   const _RecoverySection({
+    this.customBorderRadius,
     required this.readinessScore,
     required this.recoveryLabel,
     required this.averageRecoveryHours,
@@ -1900,6 +2843,7 @@ class _RecoverySection extends StatelessWidget {
     required this.sourceLabel,
   });
 
+  final BorderRadius? customBorderRadius;
   final int readinessScore;
   final String recoveryLabel;
   final double? averageRecoveryHours;
@@ -1921,7 +2865,7 @@ class _RecoverySection extends StatelessWidget {
 
   Color _recoveryColor(double recoveryPercent) {
     if (recoveryPercent >= 70) return Colors.green.shade700;
-    if (recoveryPercent >= 40) return Colors.orange.shade700;
+    if (recoveryPercent >= 40) return kCautionColor;
     return Colors.red.shade700;
   }
 
@@ -1942,7 +2886,7 @@ class _RecoverySection extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
         decoration: BoxDecoration(
           color: color.withValues(alpha: connected ? 0.13 : 0.09),
-          borderRadius: BorderRadius.circular(999),
+          borderRadius: BorderRadius.circular(kIosCornerRadius),
           border: Border.all(color: color.withValues(alpha: 0.24)),
         ),
         child: Text(
@@ -1958,12 +2902,13 @@ class _RecoverySection extends StatelessWidget {
     }
 
     return SectionBoundary(
+      customBorderRadius: customBorderRadius,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Recovery stats',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          const _SectionHeaderRow(
+            title: 'Recovery stats',
+            actionLabel: 'Sources',
           ),
           const SizedBox(height: 8),
           Wrap(
@@ -2056,7 +3001,7 @@ class _RecoverySection extends StatelessWidget {
                       ),
                       decoration: BoxDecoration(
                         color: color.withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(999),
+                        borderRadius: BorderRadius.circular(kIosCornerRadius),
                         border: Border.all(
                           color: color.withValues(alpha: 0.26),
                         ),
@@ -2102,6 +3047,7 @@ class _RecoverySection extends StatelessWidget {
 
 class _ConsistencySection extends StatelessWidget {
   const _ConsistencySection({
+    this.customBorderRadius,
     required this.streakDays,
     required this.weeklyCompletionPercent,
     required this.trainingScore,
@@ -2112,17 +3058,17 @@ class _ConsistencySection extends StatelessWidget {
   final int weeklyCompletionPercent;
   final int trainingScore;
   final List<double> heatmapShades;
+  final BorderRadius? customBorderRadius;
 
   @override
   Widget build(BuildContext context) {
+    final trainingScoreColor = _trainingScoreAccentColor(trainingScore);
     return SectionBoundary(
+      customBorderRadius: customBorderRadius,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Consistency',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-          ),
+          const _SectionHeaderRow(title: 'Consistency', actionLabel: 'Weekly'),
           const SizedBox(height: 10),
           Row(
             children: [
@@ -2144,6 +3090,7 @@ class _ConsistencySection extends StatelessWidget {
                 child: _MiniStatTile(
                   title: 'Training score',
                   value: '$trainingScore/100',
+                  accentColor: trainingScoreColor,
                 ),
               ),
             ],
@@ -2158,6 +3105,7 @@ class _ConsistencySection extends StatelessWidget {
 
 class _MuscleBalanceSection extends StatelessWidget {
   const _MuscleBalanceSection({
+    this.customBorderRadius,
     required this.pushRatio,
     required this.pullRatio,
     required this.recoveryLabel,
@@ -2166,6 +3114,7 @@ class _MuscleBalanceSection extends StatelessWidget {
   final double pushRatio;
   final double pullRatio;
   final String recoveryLabel;
+  final BorderRadius? customBorderRadius;
 
   @override
   Widget build(BuildContext context) {
@@ -2180,12 +3129,13 @@ class _MuscleBalanceSection extends StatelessWidget {
             : 'Push/Pull balance is within range.';
 
     return SectionBoundary(
+      customBorderRadius: customBorderRadius,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
             'Muscle balance',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 10),
           _BalanceBar(label: 'Push', value: pushRatio),
@@ -2204,6 +3154,7 @@ class _MuscleBalanceSection extends StatelessWidget {
 
 class _ConditioningSection extends StatelessWidget {
   const _ConditioningSection({
+    this.customBorderRadius,
     required this.pullupReps,
     required this.bodyweightReps,
     required this.conditioningDurationLabel,
@@ -2212,16 +3163,18 @@ class _ConditioningSection extends StatelessWidget {
   final int pullupReps;
   final int bodyweightReps;
   final String conditioningDurationLabel;
+  final BorderRadius? customBorderRadius;
 
   @override
   Widget build(BuildContext context) {
     return SectionBoundary(
+      customBorderRadius: customBorderRadius,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
             'Bodyweight + conditioning',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 10),
           Row(
@@ -2271,13 +3224,13 @@ class _RangeChip extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(kIosCornerRadius),
         child: Ink(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color:
                 selected ? kAccentColor.withValues(alpha: 0.12) : Colors.white,
-            borderRadius: BorderRadius.circular(999),
+            borderRadius: BorderRadius.circular(kIosCornerRadius),
             border: Border.all(
               color:
                   selected
@@ -2286,10 +3239,10 @@ class _RangeChip extends StatelessWidget {
             ),
           ),
           child: Text(
-            label,
+            label.toUpperCase(),
             style: TextStyle(
               color: selected ? kAccentColor : Colors.grey.shade700,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ),
@@ -2299,19 +3252,34 @@ class _RangeChip extends StatelessWidget {
 }
 
 class _MiniStatTile extends StatelessWidget {
-  const _MiniStatTile({required this.title, required this.value});
+  const _MiniStatTile({
+    required this.title,
+    required this.value,
+    this.accentColor,
+  });
 
   final String title;
   final String value;
+  final Color? accentColor;
 
   @override
   Widget build(BuildContext context) {
+    final hasAccent = accentColor != null;
+    final foreground = accentColor ?? Colors.grey.shade800;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        color:
+            hasAccent
+                ? accentColor!.withValues(alpha: 0.09)
+                : Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(kIosCornerRadius),
+        border: Border.all(
+          color:
+              hasAccent
+                  ? accentColor!.withValues(alpha: 0.20)
+                  : Colors.grey.shade200,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2320,16 +3288,255 @@ class _MiniStatTile extends StatelessWidget {
             title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+            style: TextStyle(
+              color:
+                  hasAccent
+                      ? accentColor!.withValues(alpha: 0.90)
+                      : Colors.grey.shade600,
+              fontSize: 12,
+            ),
           ),
           const SizedBox(height: 4),
           Text(
             value,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontWeight: FontWeight.w700),
+            style: TextStyle(color: foreground, fontWeight: FontWeight.w700),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ActivityWorkoutRow extends StatelessWidget {
+  const _ActivityWorkoutRow({required this.entry, this.onTap});
+
+  final WorkoutHistoryEntry entry;
+  final VoidCallback? onTap;
+
+  String _formatDateTime(BuildContext context) {
+    final localizations = MaterialLocalizations.of(context);
+    final date = localizations.formatShortDate(entry.completedAt);
+    final time = localizations.formatTimeOfDay(
+      TimeOfDay.fromDateTime(entry.completedAt),
+    );
+    return '$date • $time';
+  }
+
+  String _formatDuration() {
+    final minutes = entry.duration.inMinutes;
+    if (minutes < 60) return '$minutes min';
+    final hours = minutes ~/ 60;
+    final rem = minutes % 60;
+    return rem == 0 ? '${hours}h' : '${hours}h ${rem}m';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final previewExercise =
+        entry.exerciseSummaries.isNotEmpty
+            ? entry.exerciseSummaries.first.exerciseName
+            : entry.workoutName;
+    return LiftPressable(
+      onTap: onTap,
+      borderRadius: kIosControlRadius,
+      pressedScale: LiftMotion.gentlePressScale,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ClipRRect(
+            borderRadius: kExerciseImageBorderRadius,
+            child: Image.network(
+              exerciseDemoImageUrl(previewExercise),
+              width: 58,
+              height: 58,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder:
+                  (context, error, stackTrace) => Container(
+                    width: 58,
+                    height: 58,
+                    color: Colors.grey.shade200,
+                    child: MynauiIcon(
+                      MynauiGlyphs.galleryMinimalistic,
+                      color: Colors.grey.shade500,
+                      size: 26,
+                    ),
+                  ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.workoutName,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  _formatDateTime(context),
+                  style: TextStyle(color: Colors.grey.shade600, fontSize: 12.5),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 6,
+                  children: [
+                    _ActivityMeta(
+                      icon: Icons.schedule_rounded,
+                      label: _formatDuration(),
+                    ),
+                    _ActivityMeta(
+                      icon: Icons.local_fire_department_rounded,
+                      label: '${entry.totalVolumeKg.toStringAsFixed(0)} kg',
+                    ),
+                    _ActivityMeta(
+                      icon: Icons.checklist_rounded,
+                      label:
+                          '${entry.exercisesCompleted}/${entry.totalExercises} exercises',
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Icon(Icons.chevron_right_rounded, color: Colors.grey.shade500),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActivityMeta extends StatelessWidget {
+  const _ActivityMeta({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: Colors.grey.shade700),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.grey.shade700,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _WorkoutHistoryPage extends StatelessWidget {
+  const _WorkoutHistoryPage({
+    required this.entries,
+    required this.selectedRange,
+  });
+
+  final List<WorkoutHistoryEntry> entries;
+  final _ProgressRange selectedRange;
+
+  int get _totalMinutes =>
+      entries.fold<int>(0, (sum, entry) => sum + entry.duration.inMinutes);
+
+  double get _totalVolume =>
+      entries.fold<double>(0, (sum, entry) => sum + entry.totalVolumeKg);
+
+  @override
+  Widget build(BuildContext context) {
+    final topInset = MediaQuery.paddingOf(context).top;
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: ColoredBox(
+        color: kProgressCanvasColor,
+        child: SafeArea(
+          top: false,
+          bottom: false,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              kPagePadding,
+              topInset + 16,
+              kPagePadding,
+              0,
+            ),
+            child: Column(
+              children: [
+                LiftIslandHeader(
+                  collapseOnScroll: false,
+                  title: 'Workout history',
+                  subtitle: selectedRange.activityLabel,
+                  leading: LiftIslandHeaderAction(
+                    onTap: () => Navigator.pop(context),
+                    child: const MynauiIcon(
+                      MynauiGlyphs.altArrowLeft,
+                      size: 24,
+                      color: kLiftIslandOnFrosted,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SectionBoundary(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _MiniStatTile(
+                          title: 'Workouts',
+                          value: '${entries.length}',
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _MiniStatTile(
+                          title: 'Training time',
+                          value: '$_totalMinutes min',
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _MiniStatTile(
+                          title: 'Volume',
+                          value: '${_totalVolume.toStringAsFixed(0)}kg',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: ListView.separated(
+                    padding: const EdgeInsets.only(bottom: 24),
+                    itemCount: entries.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder:
+                        (context, index) => SectionBoundary(
+                          child: _ActivityWorkoutRow(
+                            entry: entries[index],
+                            onTap:
+                                () => pushWorkoutHistoryDetailPage(
+                                  context,
+                                  entry: entries[index],
+                                ),
+                          ),
+                        ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -2354,26 +3561,28 @@ class _MachineStatRow extends StatelessWidget {
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kIosCornerRadius),
         border: Border.all(color: Colors.grey.shade200),
       ),
       child: Row(
         children: [
           ClipRRect(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: kExerciseImageBorderRadius,
             child: Image.network(
-              _kExercisePlaceholderImageUrl,
+              exerciseDemoImageUrl(name),
               width: 56,
               height: 56,
               fit: BoxFit.cover,
+              gaplessPlayback: true,
               errorBuilder:
                   (context, error, stackTrace) => Container(
                     width: 56,
                     height: 56,
                     color: Colors.grey.shade200,
-                    child: Icon(
-                      Icons.image_outlined,
+                    child: MynauiIcon(
+                      MynauiGlyphs.galleryMinimalistic,
                       color: Colors.grey.shade500,
+                      size: 26,
                     ),
                   ),
             ),
@@ -2416,7 +3625,7 @@ class _HeatmapCalendar extends StatelessWidget {
           height: 16,
           decoration: BoxDecoration(
             color: kAccentColor.withValues(alpha: shades[index]),
-            borderRadius: BorderRadius.circular(4),
+            borderRadius: BorderRadius.circular(kIosCornerRadius),
           ),
         );
       }),
@@ -2462,7 +3671,7 @@ class _BalanceBar extends StatelessWidget {
                 height: 12,
                 decoration: BoxDecoration(
                   color: Colors.grey.shade200,
-                  borderRadius: BorderRadius.circular(999),
+                  borderRadius: BorderRadius.circular(kIosCornerRadius),
                 ),
                 child: Align(
                   alignment: Alignment.centerLeft,
@@ -2470,7 +3679,7 @@ class _BalanceBar extends StatelessWidget {
                     width: fillWidth,
                     decoration: BoxDecoration(
                       gradient: fillGradient,
-                      borderRadius: BorderRadius.circular(999),
+                      borderRadius: BorderRadius.circular(kIosCornerRadius),
                     ),
                   ),
                 ),
@@ -2482,6 +3691,53 @@ class _BalanceBar extends StatelessWidget {
         Text(
           '${(clampedValue * 100).round()}%',
           style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReorderEditableTile extends StatelessWidget {
+  const _ReorderEditableTile({required this.child, required this.onRemove});
+
+  final Widget child;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        child,
+        Positioned(
+          top: -8,
+          right: -8,
+          child: LiftPressable(
+            onTap: onRemove,
+            borderRadius: 16,
+            pressedScale: LiftMotion.gentlePressScale,
+            child: Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.grey.shade300),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: MynauiIcon(
+                MynauiGlyphs.closeCircle,
+                size: 18,
+                color: Colors.grey.shade800,
+              ),
+            ),
+          ),
         ),
       ],
     );

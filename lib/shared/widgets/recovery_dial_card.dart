@@ -1,7 +1,17 @@
 import 'dart:math' as math;
-import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
+import 'package:lift/app/theme.dart';
+
+/// Dial diameter from card inner width — stable when tile height changes.
+double recoveryDialSizeFromInnerWidth(double innerWidth) {
+  final gap = (innerWidth * 0.05).clamp(12.0, 22.0);
+  final rowInnerW = innerWidth * 0.95;
+  const textColumnReserve = 76.0;
+  final maxByWidth = (rowInnerW - gap - textColumnReserve).clamp(0.0, 240.0);
+  const kPreferred = 128.0;
+  return math.min(kPreferred, maxByWidth);
+}
 
 class RecoveryDialCard extends StatelessWidget {
   const RecoveryDialCard({
@@ -32,34 +42,59 @@ class RecoveryDialCard extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final padX = (constraints.maxWidth * 0.04).clamp(10.0, 18.0).toDouble();
-        final padY =
-            (constraints.maxHeight * 0.05).clamp(12.0, 20.0).toDouble();
-        final percentFont =
-            (constraints.maxHeight * 0.11).clamp(24.0, 34.0).toDouble();
+        final padX = (constraints.maxWidth * 0.05).clamp(10.0, 18.0).toDouble();
+        const padY = 6.0;
+
+        final innerW = (constraints.maxWidth - 2 * padX).clamp(
+          0.0,
+          double.infinity,
+        );
+        final verticalPad = 2 * padY;
+        final availableH = math.max(0.0, constraints.maxHeight - verticalPad);
+        // Dots row is ~8px; keep a few px slack for subpixel layout (avoids Column overflow).
+        const dotsRowReserve = 12.0;
+        final heightCap =
+            showIndicator
+                ? math.max(0.0, availableH - dotsRowReserve)
+                : math.max(0.0, availableH - 2.0);
+        const dialVisualScale = 0.84;
+        final dialSide =
+            math.min(recoveryDialSizeFromInnerWidth(innerW), heightCap) *
+            dialVisualScale;
 
         return Padding(
-          padding: EdgeInsets.fromLTRB(padX, padY, padX, padY),
+          padding: EdgeInsets.symmetric(horizontal: padX, vertical: padY),
           child: Column(
             children: [
               Expanded(
-                flex: 72,
-                child: _RecoveryDialFace(
-                  muscleName: muscleName,
-                  percentage: clampedPercent,
-                  percentFont: percentFont,
-                  recoveryEtaLabel: recoveryEtaLabel,
-                  lastHitLabel: lastHitLabel,
-                  animationDuration: animationDuration,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: Center(
+                        child: SizedBox(
+                          height: dialSide,
+                          child: _RecoveryDialFace(
+                            muscleName: muscleName,
+                            percentage: clampedPercent,
+                            recoveryEtaLabel: recoveryEtaLabel,
+                            lastHitLabel: lastHitLabel,
+                            animationDuration: animationDuration,
+                            dialSize: dialSide,
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (showIndicator)
+                      Center(
+                        child: _RecoverySwipeDots(
+                          count: dotCount,
+                          activeIndex: activeDotIndex,
+                        ),
+                      ),
+                  ],
                 ),
               ),
-              if (showIndicator) ...[
-                const SizedBox(height: 14),
-                _RecoverySwipeDots(
-                  count: dotCount,
-                  activeIndex: activeDotIndex,
-                ),
-              ],
             ],
           ),
         );
@@ -72,18 +107,18 @@ class _RecoveryDialFace extends StatelessWidget {
   const _RecoveryDialFace({
     required this.muscleName,
     required this.percentage,
-    required this.percentFont,
     required this.recoveryEtaLabel,
     required this.lastHitLabel,
     required this.animationDuration,
+    required this.dialSize,
   });
 
   final String muscleName;
   final double percentage;
-  final double percentFont;
   final String? recoveryEtaLabel;
   final String? lastHitLabel;
   final Duration animationDuration;
+  final double dialSize;
 
   @override
   Widget build(BuildContext context) {
@@ -95,99 +130,116 @@ class _RecoveryDialFace extends StatelessWidget {
       builder: (context, value, _) {
         return LayoutBuilder(
           builder: (context, constraints) {
-            final dialWidth = constraints.maxWidth;
-            final dialHeight = constraints.maxHeight;
-            final strokeWidth =
-                (math.min(dialWidth, dialHeight) * 0.16).clamp(10.0, 22.0);
-
-            Color _baseColorFor(double percent) {
+            Color baseColorFor(double percent) {
               if (percent >= 80) return Colors.green.shade500;
-              if (percent >= 50) return Colors.amber.shade600;
+              if (percent >= 50) return kRecoveryMidColor;
               return Colors.red.shade500;
             }
 
-            final baseColor = _baseColorFor(percentage);
+            final baseColor = baseColorFor(percentage);
+            final eta = recoveryEtaLabel;
+            final last = lastHitLabel;
+            final gap = (constraints.maxWidth * 0.05).clamp(12.0, 22.0);
+            final strokeWidth = (dialSize * 0.105).clamp(4.0, 13.0).toDouble();
+            final percentFont = (dialSize * 0.24).clamp(11.0, 28.0).toDouble();
+            var innerPadding = (strokeWidth * 1.9).clamp(6.0, 18.0).toDouble();
+            innerPadding = math.min(innerPadding, dialSize * 0.30);
 
-            return Row(
-              children: [
-                Expanded(
-                  flex: 11,
-                  child: AspectRatio(
-                    aspectRatio: 1,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        CustomPaint(
-                          painter: _RecoveryArcPainter(
-                            progress: value,
-                            strokeWidth: strokeWidth,
-                            baseColor: baseColor,
-                          ),
-                        ),
-                        Center(
-                          child: Text(
-                            '${percentage.round()}%',
-                            style: TextStyle(
-                              fontSize: percentFont,
-                              fontWeight: FontWeight.w700,
-                              color: baseColor,
+            return Center(
+              child: FractionallySizedBox(
+                widthFactor: 0.95,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    SizedBox(
+                      width: dialSize,
+                      height: dialSize,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        alignment: Alignment.center,
+                        children: [
+                          CustomPaint(
+                            painter: _RecoveryArcPainter(
+                              progress: value,
+                              strokeWidth: strokeWidth,
+                              baseColor: baseColor,
                             ),
                           ),
-                        ),
-                      ],
+                          Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(innerPadding),
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  '${percentage.round()}%',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: percentFont,
+                                    fontWeight: FontWeight.w600,
+                                    color: baseColor,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 18),
-                Expanded(
-                  flex: 12,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        muscleName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
+                    SizedBox(width: gap),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              muscleName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                height: 1.1,
+                              ),
+                            ),
+                            if (eta != null && eta.isNotEmpty) ...[
+                              const SizedBox(height: 3),
+                              Text(
+                                eta,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: baseColor,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  height: 1.2,
+                                ),
+                              ),
+                            ],
+                            if (last != null && last.isNotEmpty) ...[
+                              const SizedBox(height: 5),
+                              Text(
+                                last,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.70),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w400,
+                                  height: 1.2,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
-                      if (recoveryEtaLabel != null &&
-                          recoveryEtaLabel!.isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          recoveryEtaLabel!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: baseColor,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                      if (lastHitLabel != null &&
-                          lastHitLabel!.isNotEmpty) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          lastHitLabel!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.70),
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             );
           },
         );
@@ -211,32 +263,28 @@ class _RecoveryArcPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
 
-    final center = size.center(Offset.zero) + const Offset(-4, 2);
-    final radius =
-        (math.min(size.width, size.height) / 2) - (strokeWidth / 2);
+    final center = size.center(Offset.zero);
+    final radius = (math.min(size.width, size.height) / 2) - (strokeWidth / 2);
 
     // "C" shaped arc, open on the right side like the wireframe.
     const startAngle = 135 * math.pi / 180; // top-left
     const sweepAngle = 270 * math.pi / 180; // around to bottom-left
 
-    final backgroundPaint = Paint()
-      ..color = baseColor.withValues(alpha: 0.18)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round;
+    final backgroundPaint =
+        Paint()
+          ..color = baseColor.withValues(alpha: 0.18)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = strokeWidth
+          ..strokeCap = StrokeCap.round;
 
-    final progressPaint = Paint()
-      ..shader = LinearGradient(
-        colors: [
-          baseColor.withValues(alpha: 0.65),
-          baseColor,
-        ],
-      ).createShader(
-        Rect.fromCircle(center: center, radius: radius),
-      )
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round;
+    final progressPaint =
+        Paint()
+          ..shader = LinearGradient(
+            colors: [baseColor.withValues(alpha: 0.65), baseColor],
+          ).createShader(Rect.fromCircle(center: center, radius: radius))
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = strokeWidth
+          ..strokeCap = StrokeCap.round;
 
     final arcRect = Rect.fromCircle(center: center, radius: radius);
 

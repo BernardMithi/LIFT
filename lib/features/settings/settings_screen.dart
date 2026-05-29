@@ -1,153 +1,72 @@
 import 'package:flutter/material.dart';
-import 'package:lift/app/theme.dart';
-import 'package:lift/shared/widgets/lift_island_header.dart';
+import 'package:lift/app/app_bootstrap.dart';
+import 'package:lift/features/account/account_page.dart';
+import 'package:lift/features/profile/profile_page.dart';
+import 'package:lift/shared/models/workout_history_entry.dart';
 
-class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key});
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key, this.workoutHistory});
+
+  final List<WorkoutHistoryEntry>? workoutHistory;
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-              child: LiftIslandHeader(
-                title: 'SETTINGS',
-                leading: LiftIslandHeaderAction(
-                  onTap: () => Navigator.pop(context),
-                  child: const Icon(
-                    Icons.arrow_back_ios_new_rounded,
-                    color: Colors.white,
-                    size: 22,
-                  ),
-                ),
-                trailing: const LiftIslandHeaderAction(
-                  child: Icon(
-                    Icons.settings_outlined,
-                    color: Colors.white,
-                    size: 22,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                children: const [
-                  _SettingsTile(
-                    title: 'Profile',
-                    subtitle: 'Manage your profile',
-                  ),
-                  _SettingsTile(
-                    title: 'Notifications',
-                    subtitle: 'Notification preferences',
-                  ),
-                  _SettingsTile(title: 'Privacy', subtitle: 'Privacy settings'),
-                  _SettingsTile(title: 'About', subtitle: 'About LIFT'),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsTile extends StatelessWidget {
-  const _SettingsTile({
-    required this.title,
-    required this.subtitle,
-    this.icon,
-    this.onTap,
-  });
+class _SettingsScreenState extends State<SettingsScreen> {
+  List<WorkoutHistoryEntry>? _workoutHistory;
 
-  final String title;
-  final String subtitle;
-  final IconData? icon;
-  final VoidCallback? onTap;
+  @override
+  void initState() {
+    super.initState();
+    _workoutHistory =
+        widget.workoutHistory != null
+            ? List<WorkoutHistoryEntry>.from(widget.workoutHistory!)
+            : null;
+    if (_workoutHistory == null) {
+      _loadWorkoutHistory();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant SettingsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.workoutHistory != widget.workoutHistory &&
+        widget.workoutHistory != null) {
+      _workoutHistory = List<WorkoutHistoryEntry>.from(widget.workoutHistory!);
+    }
+  }
+
+  Future<void> _loadWorkoutHistory() async {
+    final storedHistory = await loadStoredWorkoutHistory();
+    if (!mounted) return;
+    setState(() => _workoutHistory = storedHistory);
+  }
+
+  void _handleWorkoutHistoryChanged(List<WorkoutHistoryEntry> history) {
+    setState(() => _workoutHistory = List<WorkoutHistoryEntry>.from(history));
+  }
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-    final leadingIcon = icon;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Material(
-        color: Colors.white,
-        elevation: 0,
-        borderRadius: BorderRadius.circular(16),
-        shadowColor: Colors.black.withValues(alpha: 0.05),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
-              children: [
-                if (leadingIcon != null) ...[
-                  Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: kAccentColor.withValues(alpha: 0.06),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(
-                      leadingIcon,
-                      size: 18,
-                      color: kAccentColor,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                ],
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: textTheme.bodyLarge?.copyWith(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
-                            ) ??
-                            const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
-                            ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        subtitle,
-                        style: textTheme.bodySmall?.copyWith(
-                              fontSize: 12.5,
-                              color: Colors.grey.shade600,
-                            ) ??
-                            TextStyle(
-                              fontSize: 12.5,
-                              color: Colors.grey.shade600,
-                            ),
-                      ),
-                    ],
-                  ),
+    return ProfilePage(
+      showBack: true,
+      workoutHistory: _workoutHistory,
+      onSettingsTap: (profileData) {
+        Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder:
+                (_) => AccountPage(
+                  profileData: profileData,
+                  workoutHistory: _workoutHistory,
+                  onWorkoutHistoryChanged: _handleWorkoutHistoryChanged,
+                  showBack: true,
+                  showSettingsAction: false,
+                  extraBottomInset: 0,
                 ),
-                const SizedBox(width: 8),
-                Icon(
-                  Icons.chevron_right_rounded,
-                  color: Colors.grey.shade400,
-                  size: 22,
-                ),
-              ],
-            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

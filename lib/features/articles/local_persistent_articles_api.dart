@@ -9,7 +9,7 @@ class LocalPersistentArticlesApi extends ArticlesApi {
   LocalPersistentArticlesApi({InMemoryArticlesApi? memoryApi})
     : _memoryApi = memoryApi ?? InMemoryArticlesApi();
 
-  static const String _storageKey = 'lift_local_articles_v1';
+  static const String _storageKey = 'lift_local_articles_v2';
 
   InMemoryArticlesApi _memoryApi;
   bool _loadedFromDisk = false;

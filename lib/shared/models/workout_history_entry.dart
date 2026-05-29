@@ -28,6 +28,20 @@ class WorkoutHistoryEntry {
   final Map<String, double> muscleGroupVolumeKg;
 }
 
+class WorkoutHistorySetRow {
+  const WorkoutHistorySetRow({
+    required this.label,
+    required this.reps,
+    required this.weightKg,
+    required this.restSeconds,
+  });
+
+  final String label;
+  final int reps;
+  final double weightKg;
+  final int restSeconds;
+}
+
 class WorkoutHistoryExerciseSummary {
   const WorkoutHistoryExerciseSummary({
     required this.exerciseName,
@@ -36,6 +50,7 @@ class WorkoutHistoryExerciseSummary {
     required this.totalVolumeKg,
     required this.maxWeightKg,
     required this.muscleGroups,
+    this.setRows = const <WorkoutHistorySetRow>[],
   });
 
   final String exerciseName;
@@ -44,4 +59,5 @@ class WorkoutHistoryExerciseSummary {
   final double totalVolumeKg;
   final double maxWeightKg;
   final List<String> muscleGroups;
+  final List<WorkoutHistorySetRow> setRows;
 }

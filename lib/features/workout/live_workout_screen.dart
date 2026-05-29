@@ -4,17 +4,22 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lift/app/theme.dart';
+import 'package:lift/features/machines/machine_scan_flow_screen.dart';
+import 'package:lift/features/machines/mock_machines.dart';
+import 'package:lift/features/workout/exercise_details/exercise_detail_page.dart';
+import 'package:lift/features/workout/exercise_stats/exercise_stats_page.dart';
 import 'package:lift/shared/models/workout_history_entry.dart';
+import 'package:lift/shared/exercise_demo_images.dart';
 import 'package:lift/shared/models/workout_template.dart';
-import 'package:lift/shared/widgets/lift_action_button.dart';
 import 'package:lift/shared/widgets/lift_dialogs.dart';
 import 'package:lift/shared/widgets/lift_menu_sheet.dart';
+import 'package:lift/shared/icons/mynaui_glyphs.dart';
+import 'package:lift/shared/icons/mynaui_icon.dart';
 import 'package:lift/shared/widgets/surfaces.dart';
 
 const Color _kGlassGreyTint = Color(0xFFD8DDE3);
-const String _kExercisePlaceholderImageUrl =
-    'https://blocks.astratic.com/img/general-img-landscape.png';
 
 Color _glassGreyTint(double alpha) => _kGlassGreyTint.withValues(alpha: alpha);
 
@@ -111,6 +116,24 @@ const List<_LiveSwapExerciseCatalogItem> _kLiveSwapExerciseCatalog = [
     muscleGroups: ['Back', 'Biceps'],
     equipment: _LiveSwapExerciseEquipment.cables,
     keywords: ['row', 'back', 'pull'],
+  ),
+  _LiveSwapExerciseCatalogItem(
+    name: 'Single Arm Row',
+    muscleGroups: ['Back', 'Biceps'],
+    equipment: _LiveSwapExerciseEquipment.machine,
+    keywords: ['row', 'single', 'arm', 'back', 'unilateral'],
+  ),
+  _LiveSwapExerciseCatalogItem(
+    name: 'Wide Grip Row',
+    muscleGroups: ['Back', 'Biceps'],
+    equipment: _LiveSwapExerciseEquipment.machine,
+    keywords: ['row', 'wide', 'grip', 'back'],
+  ),
+  _LiveSwapExerciseCatalogItem(
+    name: 'Neutral Grip Row',
+    muscleGroups: ['Back', 'Biceps'],
+    equipment: _LiveSwapExerciseEquipment.machine,
+    keywords: ['row', 'neutral', 'grip', 'back'],
   ),
   _LiveSwapExerciseCatalogItem(
     name: 'Cable Face Pull',
@@ -213,6 +236,7 @@ class LiveWorkoutMiniState {
     required this.progressLabel,
     required this.isResting,
     required this.isFinished,
+    this.isRestOverrun = false,
   });
 
   final String templateName;
@@ -222,6 +246,7 @@ class LiveWorkoutMiniState {
   final String progressLabel;
   final bool isResting;
   final bool isFinished;
+  final bool isRestOverrun;
 }
 
 class LiveWorkoutSummaryState {
@@ -250,6 +275,49 @@ class LiveWorkoutSummaryState {
   final int prsAchieved;
   final List<WorkoutHistoryExerciseSummary> exerciseSummaries;
   final Map<String, double> muscleGroupVolumeKg;
+
+  bool get hasLoggedWork =>
+      totalReps > 0 || totalVolumeKg > 0 || exercisesCompleted > 0;
+
+  double get completionRatio {
+    if (totalExercises <= 0) return 0;
+    return (exercisesCompleted / totalExercises).clamp(0.0, 1.0);
+  }
+
+  int get estimatedCaloriesBurned {
+    if (!hasLoggedWork) return 0;
+    final activeMinutes = math.max(elapsed.inSeconds / 60.0, 1.0);
+    final durationComponent = activeMinutes * 4.2;
+    final repetitionComponent = totalReps * 0.24;
+    final loadComponent = totalVolumeKg / 210.0;
+    return math.max(
+      0,
+      (durationComponent + repetitionComponent + loadComponent).round(),
+    );
+  }
+
+  int get trainingScore {
+    if (!hasLoggedWork) return 0;
+    final completionComponent = completionRatio * 30.0;
+    final repsComponent = math.min(totalReps / 4.0, 18.0);
+    final volumeComponent = math.min(totalVolumeKg / 280.0, 28.0);
+    final calorieComponent = math.min(estimatedCaloriesBurned / 4.0, 16.0);
+    final prComponent = math.min(prsAchieved * 4.0, 8.0);
+    final total =
+        completionComponent +
+        repsComponent +
+        volumeComponent +
+        calorieComponent +
+        prComponent;
+    return total.round().clamp(0, 100);
+  }
+
+  String get workoutIntensityLabel {
+    final score = trainingScore;
+    if (score >= 70) return 'High';
+    if (score >= 35) return 'Moderate';
+    return 'Low';
+  }
 }
 
 class LiveWorkoutScreen extends StatefulWidget {
@@ -285,11 +353,15 @@ class _LiveExerciseRun {
     required this.exercise,
     required List<_LiveSetStatus> statuses,
     this.supersetGroupId,
+    this.notes = '',
+    this.notesUpdatedAt,
   }) : statuses = List<_LiveSetStatus>.from(statuses, growable: true);
 
   WorkoutTemplateExercise exercise;
   final List<_LiveSetStatus> statuses;
   String? supersetGroupId;
+  String notes;
+  DateTime? notesUpdatedAt;
   bool isExpanded = false;
 }
 
@@ -320,12 +392,16 @@ class _LiveExerciseRunSnapshot {
     required this.statuses,
     required this.isExpanded,
     required this.supersetGroupId,
+    required this.notes,
+    required this.notesUpdatedAt,
   });
 
   final WorkoutTemplateExercise exercise;
   final List<_LiveSetStatus> statuses;
   final bool isExpanded;
   final String? supersetGroupId;
+  final String notes;
+  final DateTime? notesUpdatedAt;
 }
 
 class _LiveWorkoutSnapshot {
@@ -392,6 +468,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
       progressLabel: progressLabel,
       isResting: _isRestTimerActive,
       isFinished: _isWorkoutFinished,
+      isRestOverrun: _isRestTimerActive && _restRemainingSeconds < 0,
     );
   }
 
@@ -416,6 +493,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
       var exerciseTotalReps = 0;
       var exerciseTotalVolume = 0.0;
       var exerciseMaxWeight = 0.0;
+      final completedSetRows = <WorkoutHistorySetRow>[];
       final catalogItem = _catalogItemForExerciseName(run.exercise.name);
       final fallbackMuscles = _heuristicMuscleTagsForName(run.exercise.name);
       final muscles = <String>{
@@ -438,6 +516,14 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
         exerciseTotalReps += row.reps;
         exerciseTotalVolume += rowVolume;
         exerciseMaxWeight = math.max(exerciseMaxWeight, row.weightKg);
+        completedSetRows.add(
+          WorkoutHistorySetRow(
+            label: row.label,
+            reps: row.reps,
+            weightKg: row.weightKg,
+            restSeconds: row.restSeconds,
+          ),
+        );
 
         final distributionMuscles = muscles.isEmpty ? const ['Other'] : muscles;
         final perMuscleVolume = rowVolume / distributionMuscles.length;
@@ -471,6 +557,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
             totalVolumeKg: exerciseTotalVolume,
             maxWeightKg: exerciseMaxWeight,
             muscleGroups: muscles,
+            setRows: List<WorkoutHistorySetRow>.unmodifiable(completedSetRows),
           ),
         );
       }
@@ -494,6 +581,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
   }
 
   void _emitMiniState() {
+    if (!mounted || _isDisposed) return;
     widget.onStateChanged?.call(_buildMiniState());
     widget.onSummaryChanged?.call(_buildSummaryState());
   }
@@ -512,10 +600,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
       if (_isDisposed || !mounted) return;
       setState(() {
         if (_isRestTimerActive) {
-          _restRemainingSeconds = math.max(0, _restRemainingSeconds - 1);
-          if (_restRemainingSeconds == 0) {
-            _isRestTimerActive = false;
-          }
+          _restRemainingSeconds -= 1;
         }
       });
       _emitMiniState();
@@ -615,11 +700,11 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     if (totalSeconds >= 3600) {
       final hours = totalSeconds ~/ 3600;
       final mins = ((totalSeconds % 3600) ~/ 60).toString().padLeft(2, '0');
-      return '${isOverrun ? '+' : ''}${hours}h ${mins}m';
+      return '${isOverrun ? '-' : ''}${hours}h ${mins}m';
     }
     final mins = (totalSeconds ~/ 60).toString().padLeft(2, '0');
     final secs = (totalSeconds % 60).toString().padLeft(2, '0');
-    return '${isOverrun ? '+' : ''}$mins:$secs';
+    return '${isOverrun ? '-' : ''}$mins:$secs';
   }
 
   String _formatWeight(double kg) {
@@ -692,6 +777,9 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
         estimatedMinutes: _estimateExerciseMinutesFromRows(rows),
       ),
       statuses: statuses,
+      supersetGroupId: run.supersetGroupId,
+      notes: run.notes,
+      notesUpdatedAt: run.notesUpdatedAt,
     )..isExpanded = run.isExpanded;
     _runs[exerciseIndex] = updatedRun;
   }
@@ -1029,7 +1117,9 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     final selected = await showModalBottomSheet<int>(
       context: context,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(kIosCornerRadius),
+        ),
       ),
       builder: (context) {
         Duration temp = Duration(seconds: current);
@@ -1045,7 +1135,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                   height: 5,
                   decoration: BoxDecoration(
                     color: Colors.black.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(999),
+                    borderRadius: BorderRadius.circular(kIosCornerRadius),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -1107,7 +1197,9 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     return showModalBottomSheet<double>(
       context: context,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(kIosCornerRadius),
+        ),
       ),
       builder: (context) {
         return SafeArea(
@@ -1124,7 +1216,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                       height: 5,
                       decoration: BoxDecoration(
                         color: Colors.black.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(999),
+                        borderRadius: BorderRadius.circular(kIosCornerRadius),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -1346,6 +1438,23 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     return '${item.muscleGroups.join(' • ')}  •  ${item.equipment.label}';
   }
 
+  bool _liveCatalogItemMatchesSearch(
+    _LiveSwapExerciseCatalogItem item,
+    String q,
+  ) {
+    if (q.isEmpty) return true;
+    final lower = q.toLowerCase();
+    if (item.name.toLowerCase().contains(lower)) return true;
+    for (final m in item.muscleGroups) {
+      if (m.toLowerCase().contains(lower)) return true;
+    }
+    if (item.equipment.label.toLowerCase().contains(lower)) return true;
+    for (final k in item.keywords) {
+      if (k.contains(lower)) return true;
+    }
+    return false;
+  }
+
   String _nextDynamicExerciseId() {
     _dynamicExerciseSeed += 1;
     return 'live_ex_${DateTime.now().millisecondsSinceEpoch}_$_dynamicExerciseSeed';
@@ -1417,6 +1526,8 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
               statuses: List<_LiveSetStatus>.from(run.statuses),
               isExpanded: run.isExpanded,
               supersetGroupId: run.supersetGroupId,
+              notes: run.notes,
+              notesUpdatedAt: run.notesUpdatedAt,
             ),
           )
           .toList(growable: false),
@@ -1430,6 +1541,8 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
         exercise: snapRun.exercise,
         statuses: List<_LiveSetStatus>.from(snapRun.statuses),
         supersetGroupId: snapRun.supersetGroupId,
+        notes: snapRun.notes,
+        notesUpdatedAt: snapRun.notesUpdatedAt,
       )..isExpanded = snapRun.isExpanded;
       _runs[i] = restoredRun;
     }
@@ -1479,15 +1592,30 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
 
     _isSetConfirmDialogOpen = true;
     try {
-      return await showDialog<({int reps, double weightKg})>(
+      return await showModalBottomSheet<({int reps, double weightKg})>(
         context: context,
-        barrierColor: Colors.black.withValues(alpha: 0.42),
-        builder: (context) {
+        isScrollControlled: true,
+        useSafeArea: false,
+        backgroundColor: Colors.transparent,
+        barrierColor: Colors.black.withValues(alpha: 0.30),
+        builder: (sheetContext) {
           var isClosing = false;
           final setBadge = _setLabel(row.label);
+          final softCardShadow = <BoxShadow>[
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.07),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ];
+          const dialogRadius = 30.0;
+          const metricCardRadius = 28.0;
+          const fieldRadius = 26.0;
+          const chipRadius = 24.0;
+          const actionButtonRadius = 32.0;
 
           Widget metricCard({
-            required IconData icon,
+            required String icon,
             required String label,
             required String unit,
             required String value,
@@ -1498,20 +1626,17 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
               child: Container(
                 padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [_glassGreyTint(0.20), _glassGreyTint(0.14)],
-                  ),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: _glassGreyTint(0.30)),
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(metricCardRadius),
+                  border: Border.all(color: const Color(0xFFE0E3E8)),
+                  boxShadow: softCardShadow,
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
-                        Icon(icon, size: 14, color: kAccentColor),
+                        MynauiIcon(icon, size: 14, color: kAccentColor),
                         const SizedBox(width: 6),
                         Text(
                           label,
@@ -1538,7 +1663,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                       decoration: InputDecoration(
                         isDense: true,
                         filled: true,
-                        fillColor: Colors.white.withValues(alpha: 0.74),
+                        fillColor: const Color(0xFFF8F9FB),
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 10,
                           vertical: 14,
@@ -1550,16 +1675,14 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                           fontSize: 11,
                         ),
                         enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(14),
-                          borderSide: BorderSide(
-                            color: _glassGreyTint(0.40),
+                          borderRadius: BorderRadius.circular(fieldRadius),
+                          borderSide: const BorderSide(
+                            color: Color(0xFFD8DCE3),
                             width: 1.1,
                           ),
                         ),
                         focusedBorder: OutlineInputBorder(
-                          borderRadius: const BorderRadius.all(
-                            Radius.circular(14),
-                          ),
+                          borderRadius: BorderRadius.circular(fieldRadius),
                           borderSide: BorderSide(
                             color: kAccentColor.withValues(alpha: 0.8),
                             width: 1.4,
@@ -1581,22 +1704,22 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
               color: Colors.transparent,
               child: InkWell(
                 onTap: onTap,
-                borderRadius: BorderRadius.circular(999),
+                borderRadius: BorderRadius.circular(chipRadius),
                 child: Ink(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 10,
                     vertical: 6,
                   ),
                   decoration: BoxDecoration(
-                    color: _glassGreyTint(0.18),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: _glassGreyTint(0.30)),
+                    color: const Color(0xFFE8EAEE),
+                    borderRadius: BorderRadius.circular(chipRadius),
+                    border: Border.all(color: const Color(0xFFD5D9E0)),
                   ),
                   child: Text(
                     label,
                     style: const TextStyle(
                       color: kAccentColor,
-                      fontWeight: FontWeight.w700,
+                      fontWeight: FontWeight.w500,
                       fontSize: 11,
                     ),
                   ),
@@ -1608,7 +1731,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
           void close([({int reps, double weightKg})? value]) {
             if (isClosing) return;
             isClosing = true;
-            Navigator.of(context, rootNavigator: true).pop(value);
+            Navigator.of(sheetContext).pop(value);
           }
 
           return StatefulBuilder(
@@ -1631,249 +1754,269 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                 setDialogState(() {});
               }
 
-              return Dialog(
-                backgroundColor: Colors.transparent,
-                insetPadding: const EdgeInsets.symmetric(
-                  horizontal: 22,
-                  vertical: 24,
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(28),
-                  child: BackdropFilter(
-                    filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(28),
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [_glassGreyTint(0.40), _glassGreyTint(0.28)],
-                        ),
-                        border: Border.all(color: _glassGreyTint(0.34)),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.10),
-                            blurRadius: 24,
-                            offset: Offset.zero,
+              return Align(
+                alignment: Alignment.bottomCenter,
+                child: SizedBox(
+                  width: MediaQuery.sizeOf(context).width,
+                  child: LiftMenuSheet(
+                    borderRadius: dialogRadius,
+                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+                    safeAreaBottomFactor: 0.35,
+                    children: [
+                      const SizedBox(height: 6),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(
+                            width: 34,
+                            height: 34,
+                            child: Center(
+                              child: MynauiIcon(
+                                MynauiGlyphs.checkCircle,
+                                size: 28,
+                                color: kAccentColor,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Confirm set',
+                                  style: TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w500,
+                                    letterSpacing: -0.4,
+                                    color: Color(0xFF161616),
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  run.exercise.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w400,
+                                    color: Color(0xFF74808E),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF0F1F4),
+                              borderRadius: BorderRadius.circular(chipRadius),
+                              border: Border.all(
+                                color: const Color(0xFFDDE1E8),
+                              ),
+                              boxShadow: softCardShadow,
+                            ),
+                            child: Text(
+                              'SET $setBadge',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: kAccentColor,
+                              ),
+                            ),
                           ),
                         ],
                       ),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    _glassGreyTint(0.20),
-                                    _glassGreyTint(0.12),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          metricCard(
+                            icon: MynauiGlyphs.refresh,
+                            label: 'Reps',
+                            unit: '',
+                            value: repsText,
+                            keyboardType: TextInputType.number,
+                            onChanged: (value) => repsText = value,
+                          ),
+                          const SizedBox(width: 10),
+                          metricCard(
+                            icon: MynauiGlyphs.dumbbells,
+                            label: 'Weight',
+                            unit: 'KG',
+                            value: weightText,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            onChanged: (value) => weightText = value,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Wrap(
+                              alignment: WrapAlignment.center,
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                quickAdjustChip(
+                                  label: '-1 rep',
+                                  onTap: () => nudgeReps(-1),
+                                ),
+                                quickAdjustChip(
+                                  label: '+1 rep',
+                                  onTap: () => nudgeReps(1),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Wrap(
+                              alignment: WrapAlignment.center,
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                quickAdjustChip(
+                                  label: '-2.5kg',
+                                  onTap: () => nudgeWeight(-2.5),
+                                ),
+                                quickAdjustChip(
+                                  label: '+2.5kg',
+                                  onTap: () => nudgeWeight(2.5),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Material(
+                              color: Colors.transparent,
+                              elevation: 2,
+                              borderRadius: BorderRadius.circular(
+                                actionButtonRadius,
+                              ),
+                              shadowColor: Colors.black.withValues(alpha: 0.12),
+                              child: OutlinedButton(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: kAccentColor,
+                                  backgroundColor: Colors.white,
+                                  side: const BorderSide(
+                                    color: Color(0xFFD0D5DD),
+                                  ),
+                                  minimumSize: const Size.fromHeight(48),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 18,
+                                    vertical: 10,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(
+                                      actionButtonRadius,
+                                    ),
+                                  ),
+                                ),
+                                onPressed: () => close(),
+                                child: SizedBox(
+                                  width: double.infinity,
+                                  height: 24,
+                                  child: Stack(
+                                    alignment: Alignment.center,
+                                    children: [
+                                      Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: MynauiIcon(
+                                          MynauiGlyphs.closeCircle,
+                                          size: 18,
+                                          color: kAccentColor,
+                                        ),
+                                      ),
+                                      const Text(
+                                        'Cancel',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: FilledButton(
+                              onPressed: () {
+                                if (isClosing) return;
+                                final reps = int.tryParse(repsText.trim());
+                                final weight = double.tryParse(
+                                  weightText.trim(),
+                                );
+                                if (reps == null ||
+                                    reps <= 0 ||
+                                    weight == null ||
+                                    weight < 0) {
+                                  return;
+                                }
+                                close((reps: reps, weightKg: weight));
+                              },
+                              style: FilledButton.styleFrom(
+                                backgroundColor: kAccentColor,
+                                foregroundColor: Colors.white,
+                                elevation: 2,
+                                shadowColor: Colors.black.withValues(
+                                  alpha: 0.22,
+                                ),
+                                minimumSize: const Size.fromHeight(48),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                  vertical: 10,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(
+                                    actionButtonRadius,
+                                  ),
+                                ),
+                              ),
+                              child: SizedBox(
+                                width: double.infinity,
+                                height: 24,
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: const [
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: MynauiIcon(
+                                        MynauiGlyphs.checkUnread,
+                                        size: 18,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Log Set',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
                                   ],
                                 ),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(color: _glassGreyTint(0.32)),
-                              ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    width: 44,
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                      color: kAccentColor,
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: const Icon(
-                                      Icons.check_rounded,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        const Text(
-                                          'Confirm set',
-                                          style: TextStyle(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          run.exercise.name,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            color: Colors.grey.shade800,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: _glassGreyTint(0.22),
-                                      borderRadius: BorderRadius.circular(999),
-                                      border: Border.all(
-                                        color: _glassGreyTint(0.32),
-                                      ),
-                                    ),
-                                    child: Text(
-                                      'SET $setBadge',
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w800,
-                                        color: kAccentColor,
-                                      ),
-                                    ),
-                                  ),
-                                ],
                               ),
                             ),
-                            const SizedBox(height: 14),
-                            Row(
-                              children: [
-                                metricCard(
-                                  icon: Icons.repeat_rounded,
-                                  label: 'Reps',
-                                  unit: '',
-                                  value: repsText,
-                                  keyboardType: TextInputType.number,
-                                  onChanged: (value) => repsText = value,
-                                ),
-                                const SizedBox(width: 10),
-                                metricCard(
-                                  icon: Icons.fitness_center_rounded,
-                                  label: 'Weight',
-                                  unit: 'KG',
-                                  value: weightText,
-                                  keyboardType:
-                                      const TextInputType.numberWithOptions(
-                                        decimal: true,
-                                      ),
-                                  onChanged: (value) => weightText = value,
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(
-                                  child: Wrap(
-                                    alignment: WrapAlignment.center,
-                                    spacing: 8,
-                                    runSpacing: 8,
-                                    children: [
-                                      quickAdjustChip(
-                                        label: '-1 rep',
-                                        onTap: () => nudgeReps(-1),
-                                      ),
-                                      quickAdjustChip(
-                                        label: '+1 rep',
-                                        onTap: () => nudgeReps(1),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Wrap(
-                                    alignment: WrapAlignment.center,
-                                    spacing: 8,
-                                    runSpacing: 8,
-                                    children: [
-                                      quickAdjustChip(
-                                        label: '-2.5kg',
-                                        onTap: () => nudgeWeight(-2.5),
-                                      ),
-                                      quickAdjustChip(
-                                        label: '+2.5kg',
-                                        onTap: () => nudgeWeight(2.5),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton(
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: kAccentColor,
-                                      backgroundColor: _glassGreyTint(0.16),
-                                      side: BorderSide(
-                                        color: _glassGreyTint(0.32),
-                                      ),
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 14,
-                                      ),
-                                    ),
-                                    onPressed: () => close(),
-                                    child: const Text(
-                                      'Cancel',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: FilledButton(
-                                    style: FilledButton.styleFrom(
-                                      backgroundColor: kAccentColor,
-                                      elevation: 0,
-                                      shadowColor: Colors.transparent,
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 14,
-                                      ),
-                                    ),
-                                    onPressed: () {
-                                      if (isClosing) return;
-                                      final reps = int.tryParse(
-                                        repsText.trim(),
-                                      );
-                                      final weight = double.tryParse(
-                                        weightText.trim(),
-                                      );
-                                      if (reps == null ||
-                                          reps <= 0 ||
-                                          weight == null ||
-                                          weight < 0) {
-                                        return;
-                                      }
-                                      close((reps: reps, weightKg: weight));
-                                    },
-                                    child: const Text(
-                                      'Log Set',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
-                    ),
+                    ],
                   ),
                 ),
               );
@@ -1904,16 +2047,20 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     final selected = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
+      useSafeArea: false,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.30),
+      builder: (sheetContext) {
         String? selectedMuscleGroup =
             currentCatalogItem?.muscleGroups.isNotEmpty == true
                 ? currentCatalogItem!.muscleGroups.first
                 : null;
         _LiveSwapExerciseEquipment? selectedEquipment =
             currentCatalogItem?.equipment;
+        var searchQuery = '';
+        var filtersExpanded = false;
+        var catalogHeaderHeight = 0.0;
+        final catalogHeaderKey = GlobalKey();
 
         return StatefulBuilder(
           builder: (context, setModalState) {
@@ -1925,86 +2072,211 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                     final matchesEquipment =
                         selectedEquipment == null ||
                         item.equipment == selectedEquipment;
-                    return matchesMuscle && matchesEquipment;
+                    return matchesMuscle &&
+                        matchesEquipment &&
+                        _liveCatalogItemMatchesSearch(item, searchQuery);
                   }).toList()
                   ..sort((a, b) => a.name.compareTo(b.name));
 
-            return SafeArea(
-              top: false,
-              child: SizedBox(
-                height: math.min(MediaQuery.sizeOf(context).height * 0.84, 700),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 8),
-                    Container(
-                      width: 46,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(999),
+            final suggestedFiltered =
+                suggested
+                    .where(
+                      (item) =>
+                          _liveCatalogItemMatchesSearch(item, searchQuery),
+                    )
+                    .toList();
+
+            final filterSummary =
+                '${selectedMuscleGroup ?? 'All muscles'} · ${selectedEquipment?.label ?? 'All equipment'}';
+
+            final sheetRadius = BorderRadius.vertical(
+              top: Radius.circular(kIosSurfaceRadius),
+            );
+
+            final sheetMaxHeight = math.min(
+              MediaQuery.sizeOf(context).height * 0.88,
+              720.0,
+            );
+            final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
+
+            void syncCatalogHeaderHeight() {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                final measuredHeight =
+                    catalogHeaderKey.currentContext?.size?.height;
+                if (measuredHeight == null) return;
+                if ((measuredHeight - catalogHeaderHeight).abs() < 0.5) return;
+                setModalState(() {
+                  catalogHeaderHeight = measuredHeight;
+                });
+              });
+            }
+
+            Future<void> handleMachineScan() async {
+              final picked = await Navigator.of(context).push<String>(
+                MaterialPageRoute<String>(
+                  builder:
+                      (_) => const MachineScanFlowScreen(
+                        machine: MockMachines.swivelHandleRow,
+                        returnExerciseOnTap: true,
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title,
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                            ),
+                ),
+              );
+              final name = picked?.trim();
+              if (name == null || name.isEmpty) return;
+              if (!sheetContext.mounted) return;
+              Navigator.of(sheetContext).pop(name);
+            }
+
+            Widget buildCatalogHeader() {
+              return Padding(
+                key: catalogHeaderKey,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: SectionBoundary(
+                  floating: true,
+                  floatingBackgroundOpacity: 0.98,
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(kIosCornerRadius),
+                          border: Border.all(
+                            color: Colors.grey.shade300.withValues(alpha: 0.6),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            subtitle ?? 'Replacing ${replacing.name}',
-                            style: TextStyle(
-                              fontSize: 12,
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 2,
+                        ),
+                        child: TextField(
+                          textCapitalization: TextCapitalization.none,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          textInputAction: TextInputAction.search,
+                          onChanged: (v) {
+                            setModalState(
+                              () => searchQuery = v.trim().toLowerCase(),
+                            );
+                          },
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Color(0xFF171717),
+                          ),
+                          decoration: InputDecoration(
+                            border: InputBorder.none,
+                            isDense: true,
+                            icon: MynauiIcon(
+                              MynauiGlyphs.magnifer,
+                              color: kAccentColor,
+                              size: 21,
+                            ),
+                            hintText: 'Search exercises',
+                            hintStyle: TextStyle(
                               color: Colors.grey.shade600,
+                              fontSize: 14,
                             ),
                           ),
-                        ],
+                        ),
                       ),
-                    ),
-                    Expanded(
-                      child: ListView(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                        children: [
-                          if (suggested.isNotEmpty) ...[
-                            const _LiveSwapSectionTitle('Suggested Exercises'),
-                            const SizedBox(height: 8),
-                            ...suggested.map(
-                              (item) => _LiveSwapExerciseTile(
-                                title: item.name,
-                                subtitle: _swapExerciseSubtitle(item),
-                                isCurrent: item.name == replacing.name,
-                                onTap: () => Navigator.pop(context, item.name),
+                      const SizedBox(height: 10),
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap:
+                              () => setModalState(
+                                () => filtersExpanded = !filtersExpanded,
+                              ),
+                          borderRadius: BorderRadius.circular(kIosCornerRadius),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 8,
+                            ),
+                            child: Row(
+                              children: [
+                                MynauiIcon(
+                                  MynauiGlyphs.filter,
+                                  size: 20,
+                                  color: Colors.grey.shade800,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Muscle & equipment',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.grey.shade800,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        filterSummary,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.grey.shade600,
+                                          height: 1.2,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Icon(
+                                  filtersExpanded
+                                      ? Icons.expand_less_rounded
+                                      : Icons.expand_more_rounded,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (filtersExpanded) ...[
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Muscle groups',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.grey.shade700,
                               ),
                             ),
-                            const SizedBox(height: 14),
-                          ],
-                          const _LiveSwapSectionTitle('Muscle Groups'),
-                          const SizedBox(height: 8),
-                          Wrap(
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          child: Wrap(
                             spacing: 8,
                             runSpacing: 8,
                             children: [
-                              ChoiceChip(
-                                label: const Text('All'),
+                              _LiftCatalogFilterChip(
+                                label: 'All',
                                 selected: selectedMuscleGroup == null,
-                                onSelected: (_) {
+                                onTap: () {
                                   setModalState(
                                     () => selectedMuscleGroup = null,
                                   );
                                 },
                               ),
                               ...allMuscleGroups.map(
-                                (group) => ChoiceChip(
-                                  label: Text(group),
+                                (group) => _LiftCatalogFilterChip(
+                                  label: group,
                                   selected: selectedMuscleGroup == group,
-                                  onSelected: (_) {
+                                  onTap: () {
                                     setModalState(() {
                                       selectedMuscleGroup =
                                           selectedMuscleGroup == group
@@ -2016,25 +2288,41 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 14),
-                          const _LiveSwapSectionTitle('Equipment'),
-                          const SizedBox(height: 8),
-                          Wrap(
+                        ),
+                        const SizedBox(height: 10),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 0, 14, 0),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Equipment',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.grey.shade700,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          child: Wrap(
                             spacing: 8,
                             runSpacing: 8,
                             children: [
-                              ChoiceChip(
-                                label: const Text('All'),
+                              _LiftCatalogFilterChip(
+                                label: 'All',
                                 selected: selectedEquipment == null,
-                                onSelected: (_) {
+                                onTap: () {
                                   setModalState(() => selectedEquipment = null);
                                 },
                               ),
                               ..._LiveSwapExerciseEquipment.values.map(
-                                (equipment) => ChoiceChip(
-                                  label: Text(equipment.label),
+                                (equipment) => _LiftCatalogFilterChip(
+                                  label: equipment.label,
                                   selected: selectedEquipment == equipment,
-                                  onSelected: (_) {
+                                  onTap: () {
                                     setModalState(() {
                                       selectedEquipment =
                                           selectedEquipment == equipment
@@ -2046,23 +2334,275 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 14),
-                          _LiveSwapSectionTitle(
-                            'Exercises (${filtered.length})',
-                          ),
-                          const SizedBox(height: 8),
-                          ...filtered.map(
-                            (item) => _LiveSwapExerciseTile(
-                              title: item.name,
-                              subtitle: _swapExerciseSubtitle(item),
-                              isCurrent: item.name == replacing.name,
-                              onTap: () => Navigator.pop(context, item.name),
-                            ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            syncCatalogHeaderHeight();
+
+            return Align(
+              alignment: Alignment.bottomCenter,
+              child: SizedBox(
+                width: MediaQuery.sizeOf(context).width,
+                child: ClipRRect(
+                  borderRadius: sheetRadius,
+                  clipBehavior: Clip.hardEdge,
+                  child: BackdropFilter(
+                    filter: ui.ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: sheetRadius,
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            const Color(0xFFF1F2F5).withValues(alpha: 0.78),
+                            const Color(0xFFE7E9EE).withValues(alpha: 0.70),
+                            const Color(0xFFF3F4F7).withValues(alpha: 0.84),
+                          ],
+                        ),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.28),
+                          width: 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.22),
+                            blurRadius: 34,
+                            offset: const Offset(0, 14),
                           ),
                         ],
                       ),
+                      child: SafeArea(
+                        top: false,
+                        bottom: false,
+                        left: false,
+                        right: false,
+                        child: SizedBox(
+                          height: sheetMaxHeight + bottomInset,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              const SizedBox(height: 8),
+                              Center(
+                                child: Container(
+                                  width: 48,
+                                  height: 5,
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withValues(alpha: 0.09),
+                                    borderRadius: kIosChipBorderRadius,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  14,
+                                  0,
+                                  14,
+                                  0,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            title,
+                                            style: const TextStyle(
+                                              fontSize: 17,
+                                              fontWeight: FontWeight.w500,
+                                              letterSpacing: -0.4,
+                                              color: Color(0xFF161616),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        LiftMenuHeaderIconButton(
+                                          onTap:
+                                              () => unawaited(
+                                                handleMachineScan(),
+                                              ),
+                                          child: MynauiIcon(
+                                            MynauiGlyphs.qrCode,
+                                            size: 28,
+                                            color: kAccentColor,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      subtitle ?? 'Replacing ${replacing.name}',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w400,
+                                        color: Color(0xFF74808E),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Expanded(
+                                child: Stack(
+                                  children: [
+                                    Positioned.fill(
+                                      child: ClipRect(
+                                        child: ShaderMask(
+                                          blendMode: BlendMode.dstIn,
+                                          shaderCallback: (bounds) {
+                                            final hiddenFraction =
+                                                bounds.height <= 0
+                                                    ? 0.0
+                                                    : ((catalogHeaderHeight +
+                                                                8) /
+                                                            bounds.height)
+                                                        .clamp(0.0, 1.0);
+                                            final revealFraction = math.min(
+                                              1.0,
+                                              hiddenFraction + 0.02,
+                                            );
+                                            return LinearGradient(
+                                              begin: Alignment.topCenter,
+                                              end: Alignment.bottomCenter,
+                                              colors: const [
+                                                Colors.transparent,
+                                                Colors.transparent,
+                                                Colors.white,
+                                                Colors.white,
+                                              ],
+                                              stops: [
+                                                0.0,
+                                                hiddenFraction,
+                                                revealFraction,
+                                                1.0,
+                                              ],
+                                            ).createShader(bounds);
+                                          },
+                                          child: CustomScrollView(
+                                            slivers: [
+                                              SliverToBoxAdapter(
+                                                child: SizedBox(
+                                                  height:
+                                                      catalogHeaderHeight > 0
+                                                          ? catalogHeaderHeight +
+                                                              8
+                                                          : 0,
+                                                ),
+                                              ),
+                                              SliverPadding(
+                                                padding: EdgeInsets.fromLTRB(
+                                                  14,
+                                                  4,
+                                                  14,
+                                                  14 + bottomInset,
+                                                ),
+                                                sliver: SliverList(
+                                                  delegate: SliverChildListDelegate([
+                                                    if (suggestedFiltered
+                                                        .isNotEmpty) ...[
+                                                      const _LiveSwapSectionTitle(
+                                                        'Suggested exercises',
+                                                      ),
+                                                      const SizedBox(height: 8),
+                                                      for (
+                                                        var index = 0;
+                                                        index <
+                                                            suggestedFiltered
+                                                                .length;
+                                                        index++
+                                                      ) ...[
+                                                        _LiveSwapExerciseTile(
+                                                          title:
+                                                              suggestedFiltered[index]
+                                                                  .name,
+                                                          subtitle:
+                                                              _swapExerciseSubtitle(
+                                                                suggestedFiltered[index],
+                                                              ),
+                                                          isCurrent:
+                                                              suggestedFiltered[index]
+                                                                  .name ==
+                                                              replacing.name,
+                                                          onTap:
+                                                              () => Navigator.pop(
+                                                                sheetContext,
+                                                                suggestedFiltered[index]
+                                                                    .name,
+                                                              ),
+                                                        ),
+                                                        if (index <
+                                                            suggestedFiltered
+                                                                    .length -
+                                                                1)
+                                                          const _LiveSwapExerciseDivider(),
+                                                      ],
+                                                      const SizedBox(
+                                                        height: 12,
+                                                      ),
+                                                    ],
+                                                    _LiveSwapSectionTitle(
+                                                      'Exercises (${filtered.length})',
+                                                    ),
+                                                    const SizedBox(height: 8),
+                                                    for (
+                                                      var index = 0;
+                                                      index < filtered.length;
+                                                      index++
+                                                    ) ...[
+                                                      _LiveSwapExerciseTile(
+                                                        title:
+                                                            filtered[index]
+                                                                .name,
+                                                        subtitle:
+                                                            _swapExerciseSubtitle(
+                                                              filtered[index],
+                                                            ),
+                                                        isCurrent:
+                                                            filtered[index]
+                                                                .name ==
+                                                            replacing.name,
+                                                        onTap:
+                                                            () => Navigator.pop(
+                                                              sheetContext,
+                                                              filtered[index]
+                                                                  .name,
+                                                            ),
+                                                      ),
+                                                      if (index <
+                                                          filtered.length - 1)
+                                                        const _LiveSwapExerciseDivider(),
+                                                    ],
+                                                  ]),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    Positioned(
+                                      left: 0,
+                                      right: 0,
+                                      top: 0,
+                                      child: buildCatalogHeader(),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
-                  ],
+                  ),
                 ),
               ),
             );
@@ -2094,40 +2634,36 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     return showModalBottomSheet<bool>(
       context: context,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.24),
+      barrierColor: Colors.black.withValues(alpha: 0.30),
       builder: (sheetContext) {
         return SafeArea(
           top: false,
           bottom: false,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              12,
-              0,
-              12,
-              10 + MediaQuery.paddingOf(sheetContext).bottom,
-            ),
-            child: LiftMenuSheet(
-              title: title,
-              subtitle: 'Choose how to insert the next movement.',
-              children: [
-                LiftMenuActionTile(
-                  icon: const Icon(Icons.add_circle_outline_rounded),
-                  title: 'Add as new exercise',
-                  subtitle: 'Creates a standalone exercise card',
-                  accent: kAccentColor,
-                  onTap: () => Navigator.pop(sheetContext, false),
+          child: LiftMenuSheet(
+            title: title,
+            subtitle: 'Choose how to insert the next movement.',
+            children: [
+              LiftMenuActionTile(
+                icon: MynauiIcon(
+                  MynauiGlyphs.addCircle,
+                  size: 22,
+                  color: kAccentColor,
                 ),
-                const SizedBox(height: 8),
-                LiftMenuActionTile(
-                  icon: const Icon(Icons.link_rounded),
-                  title: 'Add as superset',
-                  subtitle:
-                      'Adds it to the same superset block as the previous exercise',
-                  accent: const Color(0xFF0A7A6B),
-                  onTap: () => Navigator.pop(sheetContext, true),
-                ),
-              ],
-            ),
+                title: 'Add as new exercise',
+                subtitle: 'Creates a standalone exercise card',
+                accent: kAccentColor,
+                onTap: () => Navigator.pop(sheetContext, false),
+              ),
+              const SizedBox(height: 8),
+              LiftMenuActionTile(
+                icon: const Icon(Icons.link_rounded),
+                title: 'Add as superset',
+                subtitle:
+                    'Adds it to the same superset block as the previous exercise',
+                accent: const Color(0xFF0A7A6B),
+                onTap: () => Navigator.pop(sheetContext, true),
+              ),
+            ],
           ),
         );
       },
@@ -2301,6 +2837,9 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
           estimatedMinutes: _estimateExerciseMinutesFromRows(rows),
         ),
         statuses: statuses,
+        supersetGroupId: run.supersetGroupId,
+        notes: run.notes,
+        notesUpdatedAt: run.notesUpdatedAt,
       )..isExpanded = run.isExpanded;
 
       _runs[exerciseIndex] = updatedRun;
@@ -2478,6 +3017,9 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
       final updatedRun = _LiveExerciseRun(
         exercise: nextExercise,
         statuses: nextStatuses,
+        supersetGroupId: run.supersetGroupId,
+        notes: run.notes,
+        notesUpdatedAt: run.notesUpdatedAt,
       )..isExpanded = run.isExpanded;
       _runs[exerciseIndex] = updatedRun;
       _actionHistory.clear();
@@ -2517,7 +3059,11 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
       title: 'Discard workout?',
       message:
           'This will leave the live workout session and lose unsaved progress in this prototype.',
+      cancelLabel: 'Cancel',
       confirmLabel: 'Discard',
+      cancelLeadingAssetPath: MynauiGlyphs.x,
+      confirmLeadingAssetPath: MynauiGlyphs.trashBin,
+      leadingIconSize: 22,
       confirmColor: Colors.red.shade600,
     );
     if (confirmed == true && mounted) {
@@ -2537,7 +3083,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.24),
+      barrierColor: Colors.black.withValues(alpha: 0.30),
       isScrollControlled: true,
       builder: (sheetContext) {
         return StatefulBuilder(
@@ -2551,82 +3097,80 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
             return SafeArea(
               top: false,
               bottom: false,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  12,
-                  0,
-                  12,
-                  10 +
-                      MediaQuery.paddingOf(context).bottom +
-                      MediaQuery.viewInsetsOf(context).bottom,
-                ),
-                child: LiftMenuSheet(
-                  title: 'Timer options',
-                  subtitle: 'Adjust rest time and session feedback.',
-                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
-                  children: [
-                    const SizedBox(height: 2),
-                    const Text(
-                      'Add time',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.2,
+              child: LiftMenuSheet(
+                title: 'Timer options',
+                subtitle: 'Adjust rest time and session feedback.',
+                children: [
+                  const SizedBox(height: 2),
+                  const Text(
+                    'Add time',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      _TimerOptionChip(
+                        label: '+15s',
+                        onTap: () => _addRestTimeFromOptions(15),
                       ),
+                      _TimerOptionChip(
+                        label: '+30s',
+                        onTap: () => _addRestTimeFromOptions(30),
+                      ),
+                      _TimerOptionChip(
+                        label: '+60s',
+                        onTap: () => _addRestTimeFromOptions(60),
+                      ),
+                      _TimerOptionChip(
+                        label: '+2m',
+                        onTap: () => _addRestTimeFromOptions(120),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'Feedback',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.2,
                     ),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        _TimerOptionChip(
-                          label: '+15s',
-                          onTap: () => _addRestTimeFromOptions(15),
-                        ),
-                        _TimerOptionChip(
-                          label: '+30s',
-                          onTap: () => _addRestTimeFromOptions(30),
-                        ),
-                        _TimerOptionChip(
-                          label: '+60s',
-                          onTap: () => _addRestTimeFromOptions(60),
-                        ),
-                        _TimerOptionChip(
-                          label: '+2m',
-                          onTap: () => _addRestTimeFromOptions(120),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    _TimerSettingTile(
-                      title: 'Announcements',
-                      subtitle: 'Voice time cues',
-                      value: _announcementsEnabled,
-                      onChanged:
-                          (value) => updateSetting(
-                            () => _announcementsEnabled = value,
-                          ),
-                    ),
-                    const SizedBox(height: 10),
-                    _TimerSettingTile(
-                      title: 'Haptics',
-                      subtitle: 'Vibration cues',
-                      value: _hapticsEnabled,
-                      onChanged:
-                          (value) =>
-                              updateSetting(() => _hapticsEnabled = value),
-                    ),
-                    const SizedBox(height: 10),
-                    _TimerSettingTile(
-                      title: 'Sound',
-                      subtitle: 'Audio alerts',
-                      value: _soundEnabled,
-                      onChanged:
-                          (value) =>
-                              updateSetting(() => _soundEnabled = value),
-                    ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 10),
+                  _TimerSettingTile(
+                    icon: MynauiGlyphs.megaphone,
+                    title: 'Announcements',
+                    subtitle: 'Voice time cues',
+                    value: _announcementsEnabled,
+                    onChanged:
+                        (value) =>
+                            updateSetting(() => _announcementsEnabled = value),
+                  ),
+                  const SizedBox(height: 10),
+                  _TimerSettingTile(
+                    icon: MynauiGlyphs.smartphoneVibration,
+                    title: 'Haptics',
+                    subtitle: 'Vibration cues',
+                    value: _hapticsEnabled,
+                    onChanged:
+                        (value) => updateSetting(() => _hapticsEnabled = value),
+                  ),
+                  const SizedBox(height: 10),
+                  _TimerSettingTile(
+                    icon: MynauiGlyphs.volumeSmall,
+                    title: 'Sound',
+                    subtitle: 'Audio alerts',
+                    value: _soundEnabled,
+                    onChanged:
+                        (value) => updateSetting(() => _soundEnabled = value),
+                  ),
+                ],
               ),
             );
           },
@@ -2635,10 +3179,52 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
     );
   }
 
-  void _showPlaceholderAction(String label) {
-    ScaffoldMessenger.of(
+  Future<void> _openExerciseNotesSheet(int exerciseIndex) async {
+    if (!mounted || exerciseIndex < 0 || exerciseIndex >= _runs.length) return;
+    final run = _runs[exerciseIndex];
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.30),
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          bottom: false,
+          child: _ExerciseNotesSheet(
+            exerciseName: run.exercise.name,
+            initialNotes: run.notes,
+            initialUpdatedAt: run.notesUpdatedAt,
+            onChanged: (notes, updatedAt) {
+              if (!mounted || exerciseIndex >= _runs.length) return;
+              setState(() {
+                final target = _runs[exerciseIndex];
+                target.notes = notes;
+                target.notesUpdatedAt = updatedAt;
+              });
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  void _openExerciseStatsForIndex(int exerciseIndex) {
+    if (!mounted) return;
+    final name = _runs[exerciseIndex].exercise.name;
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (context) => ExerciseStatsPage(exerciseName: name),
+      ),
+    );
+  }
+
+  void _openExerciseDetailsForIndex(int exerciseIndex) {
+    if (!mounted) return;
+    pushExerciseDetailPage(
       context,
-    ).showSnackBar(SnackBar(content: Text('$label coming next')));
+      exerciseName: _runs[exerciseIndex].exercise.name,
+    );
   }
 
   @override
@@ -2669,7 +3255,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
               padding: const EdgeInsets.fromLTRB(10, 10, 10, 12),
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.93),
-                borderRadius: BorderRadius.circular(28),
+                borderRadius: BorderRadius.circular(kIosCornerRadius),
                 border: Border.all(color: _glassGreyTint(0.24)),
                 boxShadow: [
                   BoxShadow(
@@ -2685,12 +3271,14 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                     children: [
                       InkWell(
                         onTap: _isSetConfirmDialogOpen ? null : widget.onBack,
-                        borderRadius: BorderRadius.circular(18),
+                        borderRadius: BorderRadius.circular(kIosCornerRadius),
                         child: Ink(
                           width: 46,
                           height: 46,
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(18),
+                            borderRadius: BorderRadius.circular(
+                              kIosCornerRadius,
+                            ),
                             border: Border.all(color: Colors.grey.shade300),
                             color: Colors.white,
                           ),
@@ -2705,7 +3293,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                           child: ConstrainedBox(
                             constraints: const BoxConstraints(maxWidth: 260),
                             child: GlassContainer(
-                              borderRadius: 18,
+                              borderRadius: kIosCornerRadius,
                               blur: 12,
                               showSheen: false,
                               padding: const EdgeInsets.symmetric(
@@ -2744,7 +3332,7 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                   ),
                   const SizedBox(height: 12),
                   GlassContainer(
-                    borderRadius: 22,
+                    borderRadius: kIosCornerRadius,
                     blur: 14,
                     showBorder: false,
                     showSheen: false,
@@ -2762,13 +3350,21 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   _MetricRow(
-                                    icon: Icons.favorite_rounded,
+                                    icon: MynauiIcon(
+                                      MynauiGlyphs.heartPulse,
+                                      size: 22,
+                                      color: Colors.blueGrey.shade600,
+                                    ),
                                     label: 'BPM',
                                     value: '—',
                                   ),
                                   const SizedBox(height: 8),
                                   _MetricRow(
-                                    icon: Icons.local_fire_department_rounded,
+                                    icon: MynauiIcon(
+                                      MynauiGlyphs.flame,
+                                      size: 22,
+                                      color: Colors.blueGrey.shade600,
+                                    ),
                                     label: 'KCAL',
                                     value: '—',
                                   ),
@@ -2801,10 +3397,15 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                                       child: Text(
                                         _formatRest(_restRemainingSeconds),
                                         maxLines: 1,
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           fontSize: 34,
                                           fontWeight: FontWeight.w700,
                                           letterSpacing: 1,
+                                          color:
+                                              _isRestTimerActive &&
+                                                      _restRemainingSeconds < 0
+                                                  ? Colors.red.shade700
+                                                  : null,
                                         ),
                                       ),
                                     ),
@@ -2815,10 +3416,29 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
                           ),
                           Align(
                             alignment: Alignment.centerRight,
-                            child: IconButton(
-                              tooltip: 'Workout options',
-                              onPressed: _openTimerOptionsSheet,
-                              icon: const Icon(Icons.menu_rounded, size: 28),
+                            child: Tooltip(
+                              message: 'Workout options',
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  onTap: _openTimerOptionsSheet,
+                                  customBorder: const CircleBorder(),
+                                  splashColor: Colors.black.withValues(
+                                    alpha: 0.06,
+                                  ),
+                                  highlightColor: Colors.black.withValues(
+                                    alpha: 0.04,
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(6),
+                                    child: MynauiIcon(
+                                      MynauiGlyphs.menuDotsCircle,
+                                      size: 28,
+                                      color: Colors.blueGrey.shade600,
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ),
                           ),
                         ],
@@ -2855,455 +3475,469 @@ class _LiveWorkoutScreenState extends State<LiveWorkoutScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 4),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                const footerSectionHeight = 76.0;
+                // The bottom action island lives below this Expanded region, so
+                // the list only needs a small trailing gap rather than a full
+                // footer-height reserve.
+                const footerSectionHeight = 8.0;
                 final showBottomActions = widget.showBottomActions;
 
-                Widget footerButtonsPlate() {
-                  return GlassIsland(
-                    height: footerSectionHeight,
-                    borderRadius: 28,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 10,
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: LiftActionButton(
-                            label: 'Discard',
-                            color: Colors.red.shade400,
-                            onTap: _confirmDiscard,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        LiftActionIconButton(
-                          icon: Icons.add_rounded,
-                          color: kAccentColor,
-                          size: 48,
-                          iconSize: 24,
-                          borderRadius: 18,
-                          onTap: _addExerciseAtEnd,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: LiftActionButton(
-                            label: 'Complete',
-                            onTap: widget.onCompleteWorkout,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
+                return ListView.builder(
+                  padding: EdgeInsets.only(
+                    bottom: showBottomActions ? footerSectionHeight : 16,
+                  ),
+                  itemCount: _runs.length + 1,
+                  itemBuilder: (context, index) {
+                    Widget buildInsertDropZone(int insertIndex) {
+                      final boundaryLocked = _isReorderBoundaryInsideSuperset(
+                        insertIndex,
+                      );
+                      if (boundaryLocked) {
+                        return const SizedBox(height: 2);
+                      }
 
-                Widget footerActionSection() {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    child: Align(
-                      alignment: Alignment.bottomCenter,
-                      child: footerButtonsPlate(),
-                    ),
-                  );
-                }
-
-                return Stack(
-                  children: [
-                    Positioned.fill(
-                      child: ListView.builder(
-                        padding: EdgeInsets.only(
-                          bottom:
-                              showBottomActions ? footerSectionHeight + 16 : 16,
-                        ),
-                        itemCount: _runs.length + 1,
-                        itemBuilder: (context, index) {
-                          Widget buildInsertDropZone(int insertIndex) {
-                            final boundaryLocked =
-                                _isReorderBoundaryInsideSuperset(insertIndex);
-                            if (boundaryLocked) {
-                              return const SizedBox(height: 2);
-                            }
-
-                            return DragTarget<_LiveExerciseDragPayload>(
-                              onWillAcceptWithDetails:
-                                  (details) => _canAcceptReorderDrop(
-                                    details.data,
-                                    insertIndex,
-                                  ),
-                              onAcceptWithDetails:
-                                  (details) => _moveDraggedBlockToInsertIndex(
-                                    details.data,
-                                    insertIndex,
-                                  ),
-                              builder: (context, candidates, rejected) {
-                                final hovering =
-                                    candidates.isNotEmpty &&
-                                    _canAcceptReorderDrop(
-                                      candidates.last,
-                                      insertIndex,
-                                    );
-                                final showTrack =
-                                    _isExerciseDragInProgress || hovering;
-                                final placeholderHeight =
-                                    (() {
-                                      if (!hovering) {
-                                        return showTrack ? 10.0 : 4.0;
-                                      }
-                                      final payload = candidates.last;
-                                      if (payload == null) return 92.0;
-                                      return payload.isSupersetBlock
-                                          ? 118.0
-                                          : 98.0;
-                                    })();
-                                return AnimatedContainer(
-                                  duration: const Duration(milliseconds: 170),
-                                  curve: Curves.easeOutCubic,
-                                  height: placeholderHeight,
-                                  margin: EdgeInsets.only(
-                                    top: hovering ? 2 : 0,
-                                    bottom: hovering ? 8 : 0,
-                                  ),
-                                  child: Center(
-                                    child: AnimatedContainer(
-                                      duration: const Duration(
-                                        milliseconds: 170,
-                                      ),
-                                      curve: Curves.easeOutCubic,
-                                      width: double.infinity,
-                                      decoration:
-                                          hovering
-                                              ? BoxDecoration(
-                                                borderRadius:
-                                                    BorderRadius.circular(16),
-                                                color: Colors.white.withValues(
-                                                  alpha: 0.40,
-                                                ),
-                                                border: Border.all(
-                                                  color: kAccentColor
-                                                      .withValues(alpha: 0.26),
-                                                ),
-                                              )
-                                              : null,
-                                      child:
-                                          hovering
-                                              ? Center(
-                                                child: Container(
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                        horizontal: 12,
-                                                        vertical: 6,
-                                                      ),
-                                                  decoration: BoxDecoration(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          999,
-                                                        ),
-                                                    color: Colors.white
-                                                        .withValues(
-                                                          alpha: 0.62,
-                                                        ),
-                                                    border: Border.all(
-                                                      color: kAccentColor
-                                                          .withValues(
-                                                            alpha: 0.20,
-                                                          ),
-                                                    ),
-                                                  ),
-                                                  child: const Text(
-                                                    'Drop to reorder',
-                                                    style: TextStyle(
-                                                      color: kAccentColor,
-                                                      fontSize: 11,
-                                                      fontWeight:
-                                                          FontWeight.w700,
-                                                    ),
-                                                  ),
-                                                ),
-                                              )
-                                              : Center(
-                                                child: AnimatedContainer(
-                                                  duration: const Duration(
-                                                    milliseconds: 170,
-                                                  ),
-                                                  curve: Curves.easeOutCubic,
-                                                  height: 2,
-                                                  width: showTrack ? 96 : 36,
-                                                  decoration: BoxDecoration(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          999,
-                                                        ),
-                                                    color:
-                                                        showTrack
-                                                            ? kAccentColor
-                                                                .withValues(
-                                                                  alpha: 0.18,
-                                                                )
-                                                            : Colors
-                                                                .transparent,
-                                                  ),
-                                                ),
-                                              ),
-                                    ),
-                                  ),
-                                );
-                              },
-                            );
-                          }
-
-                          if (index == _runs.length) {
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 4),
-                              child: Column(
-                                children: [
-                                  if (_runs.isNotEmpty)
-                                    buildInsertDropZone(_runs.length),
-                                  const SizedBox(height: 32),
-                                ],
-                              ),
-                            );
-                          }
-
-                          final run = _runs[index];
-                          final isCurrentExercise =
-                              active?.exerciseIndex == index;
-                          final exerciseId = run.exercise.id;
-                          final isSupersetMember = _isSupersetMember(index);
-                          final isSupersetLead = _isFirstInSupersetGroup(index);
-                          final hasSupersetNext = _hasSupersetNext(index);
-                          final dragPayload = _dragPayloadForIndex(index);
-                          final draggedExerciseCount =
-                              dragPayload.blockExerciseIds.length;
-                          final draggedSetCount = dragPayload.blockExerciseIds
-                              .fold<int>(0, (sum, id) {
-                                final runIndex = _runs.indexWhere(
-                                  (item) => item.exercise.id == id,
-                                );
-                                if (runIndex == -1) return sum;
-                                return sum +
-                                    _runs[runIndex].exercise.presetRows.length;
-                              });
-                          final supersetCard = _LiveExerciseCard(
-                            run: run,
-                            isCurrentExercise: isCurrentExercise,
-                            onToggle: () => _toggleExercise(index),
-                            setDisplayLabelForRow:
-                                (rowIndex) =>
-                                    _displaySetLabelForRun(run, rowIndex),
-                            restFormatter: _formatRest,
-                            weightFormatter: _formatWeight,
-                            onStats:
-                                () => _showPlaceholderAction('Exercise stats'),
-                            onSwap: () => _swapExerciseAt(index),
-                            onAddSet: () => _addSetToExercise(index),
-                            onDeleteRow:
-                                (rowIndex) => _deleteSetAt(index, rowIndex),
-                            onTapSetLabel:
-                                (rowIndex) => _cycleSetTypeAt(index, rowIndex),
-                            onTapReps:
-                                (rowIndex) => _editRepsAt(index, rowIndex),
-                            onTapWeight:
-                                (rowIndex) => _editWeightAt(index, rowIndex),
-                            onTapRest:
-                                (rowIndex) => _editRestAt(index, rowIndex),
-                            onCompleteRow: (rowIndex) {
-                              _confirmAndCompleteSetAt(
-                                _LivePointer(index, rowIndex),
+                      return DragTarget<_LiveExerciseDragPayload>(
+                        onWillAcceptWithDetails:
+                            (details) => _canAcceptReorderDrop(
+                              details.data,
+                              insertIndex,
+                            ),
+                        onAcceptWithDetails:
+                            (details) => _moveDraggedBlockToInsertIndex(
+                              details.data,
+                              insertIndex,
+                            ),
+                        builder: (context, candidates, rejected) {
+                          final hovering =
+                              candidates.isNotEmpty &&
+                              _canAcceptReorderDrop(
+                                candidates.last,
+                                insertIndex,
                               );
-                            },
-                            onUndoRow: (rowIndex) {
-                              _undoSetCompletionFromTick(index, rowIndex);
-                            },
-                            isUndoableDoneRow:
-                                (rowIndex) => _samePointer(
-                                  undoableCompleted,
-                                  index,
-                                  rowIndex,
-                                ),
-                          );
-                          final cardBody = ClipRRect(
-                            borderRadius: BorderRadius.circular(16),
-                            child: Dismissible(
-                              key: ValueKey('live-exercise-$exerciseId'),
-                              direction: DismissDirection.endToStart,
-                              background: const SizedBox.expand(),
-                              confirmDismiss: (_) async {
-                                if (_runs.length <= 1) {
-                                  if (!mounted) return false;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'At least one exercise is required in a live workout.',
-                                      ),
-                                    ),
-                                  );
-                                  return false;
+                          final showTrack =
+                              _isExerciseDragInProgress || hovering;
+                          final placeholderHeight =
+                              (() {
+                                if (!hovering) {
+                                  return showTrack ? 10.0 : 4.0;
                                 }
-                                return true;
-                              },
-                              onDismissed: (_) {
-                                final deleteIndex = _runs.indexWhere(
-                                  (item) => item.exercise.id == exerciseId,
-                                );
-                                if (deleteIndex >= 0) {
-                                  _deleteExerciseAt(deleteIndex);
-                                }
-                              },
-                              secondaryBackground: const _SwipeDeleteReveal(
-                                borderRadius: 16,
-                                iconSize: 24,
-                              ),
-                              child:
-                                  isSupersetMember
-                                      ? Container(
-                                        padding: const EdgeInsets.all(4),
-                                        decoration: BoxDecoration(
+                                final payload = candidates.last;
+                                if (payload == null) return 92.0;
+                                return payload.isSupersetBlock ? 118.0 : 98.0;
+                              })();
+                          return AnimatedContainer(
+                            duration: const Duration(milliseconds: 170),
+                            curve: Curves.easeOutCubic,
+                            height: placeholderHeight,
+                            margin: EdgeInsets.only(
+                              top: hovering ? 2 : 0,
+                              bottom: hovering ? 8 : 0,
+                            ),
+                            child: Center(
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 170),
+                                curve: Curves.easeOutCubic,
+                                width: double.infinity,
+                                decoration:
+                                    hovering
+                                        ? BoxDecoration(
                                           borderRadius: BorderRadius.circular(
-                                            16,
+                                            kIosCornerRadius,
                                           ),
-                                          color: kAccentColor.withValues(
-                                            alpha: 0.03,
+                                          color: Colors.white.withValues(
+                                            alpha: 0.40,
                                           ),
                                           border: Border.all(
                                             color: kAccentColor.withValues(
-                                              alpha: 0.14,
+                                              alpha: 0.26,
+                                            ),
+                                          ),
+                                        )
+                                        : null,
+                                child:
+                                    hovering
+                                        ? Center(
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 12,
+                                              vertical: 6,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              borderRadius:
+                                                  BorderRadius.circular(
+                                                    kIosCornerRadius,
+                                                  ),
+                                              color: Colors.white.withValues(
+                                                alpha: 0.62,
+                                              ),
+                                              border: Border.all(
+                                                color: kAccentColor.withValues(
+                                                  alpha: 0.20,
+                                                ),
+                                              ),
+                                            ),
+                                            child: const Text(
+                                              'Drop to reorder',
+                                              style: TextStyle(
+                                                color: kAccentColor,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ),
+                                        )
+                                        : Center(
+                                          child: AnimatedContainer(
+                                            duration: const Duration(
+                                              milliseconds: 170,
+                                            ),
+                                            curve: Curves.easeOutCubic,
+                                            height: 2,
+                                            width: showTrack ? 96 : 36,
+                                            decoration: BoxDecoration(
+                                              borderRadius:
+                                                  BorderRadius.circular(
+                                                    kIosCornerRadius,
+                                                  ),
+                                              color:
+                                                  showTrack
+                                                      ? kAccentColor.withValues(
+                                                        alpha: 0.18,
+                                                      )
+                                                      : Colors.transparent,
                                             ),
                                           ),
                                         ),
-                                        child: Column(
-                                          children: [
-                                            if (isSupersetLead) ...[
-                                              const _LiveSupersetBadge(),
-                                              const SizedBox(height: 6),
-                                            ],
-                                            supersetCard,
-                                          ],
-                                        ),
-                                      )
-                                      : supersetCard,
-                            ),
-                          );
-                          final cardSupersetTarget =
-                              DragTarget<_LiveExerciseDragPayload>(
-                                onWillAcceptWithDetails:
-                                    (details) => _canAcceptSupersetDrop(
-                                      details.data,
-                                      index,
-                                    ),
-                                onAcceptWithDetails:
-                                    (details) => _attachDraggedBlockAsSuperset(
-                                      details.data,
-                                      index,
-                                    ),
-                                builder: (context, candidates, rejected) {
-                                  final hovering =
-                                      candidates.isNotEmpty &&
-                                      _canAcceptSupersetDrop(
-                                        candidates.last,
-                                        index,
-                                      );
-                                  return AnimatedContainer(
-                                    duration: const Duration(milliseconds: 140),
-                                    curve: Curves.easeOut,
-                                    decoration:
-                                        hovering
-                                            ? BoxDecoration(
-                                              borderRadius:
-                                                  BorderRadius.circular(18),
-                                              border: Border.all(
-                                                color: kAccentColor.withValues(
-                                                  alpha: 0.35,
-                                                ),
-                                              ),
-                                              color: kAccentColor.withValues(
-                                                alpha: 0.04,
-                                              ),
-                                            )
-                                            : null,
-                                    padding:
-                                        hovering
-                                            ? const EdgeInsets.all(2)
-                                            : EdgeInsets.zero,
-                                    child: cardBody,
-                                  );
-                                },
-                              );
-                          final draggableCard = LongPressDraggable<
-                            _LiveExerciseDragPayload
-                          >(
-                            data: dragPayload,
-                            maxSimultaneousDrags: 1,
-                            feedback: Material(
-                              color: Colors.transparent,
-                              child: ConstrainedBox(
-                                constraints: BoxConstraints(
-                                  minWidth: math.min(
-                                    320,
-                                    MediaQuery.sizeOf(context).width - 32,
-                                  ),
-                                  maxWidth:
-                                      MediaQuery.sizeOf(context).width - 24,
-                                ),
-                                child: Transform.scale(
-                                  scale: 1.03,
-                                  child: _LiveExerciseDragGhost(
-                                    exerciseName:
-                                        dragPayload.anchorExerciseName,
-                                    setCount: draggedSetCount,
-                                    exerciseCount: draggedExerciseCount,
-                                    isSupersetBlock:
-                                        dragPayload.isSupersetBlock,
-                                  ),
-                                ),
                               ),
-                            ),
-                            onDragStarted: () {
-                              if (!mounted) return;
-                              setState(() => _isExerciseDragInProgress = true);
-                            },
-                            onDragEnd: (_) {
-                              if (!mounted) return;
-                              setState(() => _isExerciseDragInProgress = false);
-                            },
-                            childWhenDragging: Opacity(
-                              opacity: 0.38,
-                              child: IgnorePointer(child: cardSupersetTarget),
-                            ),
-                            child: cardSupersetTarget,
-                          );
-                          return Padding(
-                            padding: EdgeInsets.only(
-                              bottom: hasSupersetNext ? 6 : 12,
-                            ),
-                            child: Column(
-                              children: [
-                                buildInsertDropZone(index),
-                                draggableCard,
-                              ],
                             ),
                           );
                         },
-                      ),
-                    ),
-                    if (showBottomActions)
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        child: IgnorePointer(
-                          ignoring: false,
-                          child: footerActionSection(),
+                      );
+                    }
+
+                    if (index == _runs.length) {
+                      return Column(
+                        children: [
+                          if (_runs.isNotEmpty)
+                            buildInsertDropZone(_runs.length),
+                        ],
+                      );
+                    }
+
+                    final run = _runs[index];
+                    final isCurrentExercise = active?.exerciseIndex == index;
+                    final exerciseId = run.exercise.id;
+                    final isSupersetMember = _isSupersetMember(index);
+                    final isSupersetLead = _isFirstInSupersetGroup(index);
+                    final hasSupersetNext = _hasSupersetNext(index);
+                    final dragPayload = _dragPayloadForIndex(index);
+                    final draggedExerciseCount =
+                        dragPayload.blockExerciseIds.length;
+                    final draggedSetCount = dragPayload.blockExerciseIds
+                        .fold<int>(0, (sum, id) {
+                          final runIndex = _runs.indexWhere(
+                            (item) => item.exercise.id == id,
+                          );
+                          if (runIndex == -1) return sum;
+                          return sum +
+                              _runs[runIndex].exercise.presetRows.length;
+                        });
+                    final supersetCard = _LiveExerciseCard(
+                      run: run,
+                      isCurrentExercise: isCurrentExercise,
+                      onToggle: () => _toggleExercise(index),
+                      onOpenDetails: () => _openExerciseDetailsForIndex(index),
+                      setDisplayLabelForRow:
+                          (rowIndex) => _displaySetLabelForRun(run, rowIndex),
+                      restFormatter: _formatRest,
+                      weightFormatter: _formatWeight,
+                      onStats: () => _openExerciseStatsForIndex(index),
+                      onNotes: () => _openExerciseNotesSheet(index),
+                      onSwap: () => _swapExerciseAt(index),
+                      onAddSet: () => _addSetToExercise(index),
+                      onDeleteRow: (rowIndex) => _deleteSetAt(index, rowIndex),
+                      onTapSetLabel:
+                          (rowIndex) => _cycleSetTypeAt(index, rowIndex),
+                      onTapReps: (rowIndex) => _editRepsAt(index, rowIndex),
+                      onTapWeight: (rowIndex) => _editWeightAt(index, rowIndex),
+                      onTapRest: (rowIndex) => _editRestAt(index, rowIndex),
+                      onCompleteRow: (rowIndex) {
+                        _confirmAndCompleteSetAt(_LivePointer(index, rowIndex));
+                      },
+                      onUndoRow: (rowIndex) {
+                        _undoSetCompletionFromTick(index, rowIndex);
+                      },
+                      isUndoableDoneRow:
+                          (rowIndex) =>
+                              _samePointer(undoableCompleted, index, rowIndex),
+                    );
+                    final cardBody = ClipRRect(
+                      borderRadius: BorderRadius.circular(kIosCornerRadius),
+                      child: Dismissible(
+                        key: ValueKey('live-exercise-$exerciseId'),
+                        direction: DismissDirection.endToStart,
+                        background: const SizedBox.expand(),
+                        confirmDismiss: (_) async {
+                          if (_runs.length <= 1) {
+                            if (!mounted) return false;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'At least one exercise is required in a live workout.',
+                                ),
+                              ),
+                            );
+                            return false;
+                          }
+                          return true;
+                        },
+                        onDismissed: (_) {
+                          final deleteIndex = _runs.indexWhere(
+                            (item) => item.exercise.id == exerciseId,
+                          );
+                          if (deleteIndex >= 0) {
+                            _deleteExerciseAt(deleteIndex);
+                          }
+                        },
+                        secondaryBackground: const _SwipeDeleteReveal(
+                          borderRadius: kIosCornerRadius,
+                          iconSize: 20,
                         ),
+                        child:
+                            isSupersetMember
+                                ? Container(
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(
+                                      kIosCornerRadius,
+                                    ),
+                                    color: kAccentColor.withValues(alpha: 0.03),
+                                    border: Border.all(
+                                      color: kAccentColor.withValues(
+                                        alpha: 0.14,
+                                      ),
+                                    ),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      if (isSupersetLead) ...[
+                                        const _LiveSupersetBadge(),
+                                        const SizedBox(height: 6),
+                                      ],
+                                      supersetCard,
+                                    ],
+                                  ),
+                                )
+                                : supersetCard,
                       ),
-                  ],
+                    );
+                    final cardSupersetTarget =
+                        DragTarget<_LiveExerciseDragPayload>(
+                          onWillAcceptWithDetails:
+                              (details) =>
+                                  _canAcceptSupersetDrop(details.data, index),
+                          onAcceptWithDetails:
+                              (details) => _attachDraggedBlockAsSuperset(
+                                details.data,
+                                index,
+                              ),
+                          builder: (context, candidates, rejected) {
+                            final hovering =
+                                candidates.isNotEmpty &&
+                                _canAcceptSupersetDrop(candidates.last, index);
+                            return AnimatedContainer(
+                              duration: const Duration(milliseconds: 140),
+                              curve: Curves.easeOut,
+                              decoration:
+                                  hovering
+                                      ? BoxDecoration(
+                                        borderRadius: BorderRadius.circular(
+                                          kIosCornerRadius,
+                                        ),
+                                        border: Border.all(
+                                          color: kAccentColor.withValues(
+                                            alpha: 0.35,
+                                          ),
+                                        ),
+                                        color: kAccentColor.withValues(
+                                          alpha: 0.04,
+                                        ),
+                                      )
+                                      : null,
+                              padding:
+                                  hovering
+                                      ? const EdgeInsets.all(2)
+                                      : EdgeInsets.zero,
+                              child: cardBody,
+                            );
+                          },
+                        );
+                    final draggableCard =
+                        LongPressDraggable<_LiveExerciseDragPayload>(
+                          data: dragPayload,
+                          maxSimultaneousDrags: 1,
+                          feedback: Material(
+                            color: Colors.transparent,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                minWidth: math.min(
+                                  320,
+                                  MediaQuery.sizeOf(context).width - 32,
+                                ),
+                                maxWidth: MediaQuery.sizeOf(context).width - 24,
+                              ),
+                              child: Transform.scale(
+                                scale: 1.03,
+                                child: _LiveExerciseDragGhost(
+                                  exerciseName: dragPayload.anchorExerciseName,
+                                  setCount: draggedSetCount,
+                                  exerciseCount: draggedExerciseCount,
+                                  isSupersetBlock: dragPayload.isSupersetBlock,
+                                ),
+                              ),
+                            ),
+                          ),
+                          onDragStarted: () {
+                            if (!mounted) return;
+                            setState(() => _isExerciseDragInProgress = true);
+                          },
+                          onDragEnd: (_) {
+                            if (!mounted) return;
+                            setState(() => _isExerciseDragInProgress = false);
+                          },
+                          childWhenDragging: Opacity(
+                            opacity: 0.38,
+                            child: IgnorePointer(child: cardSupersetTarget),
+                          ),
+                          child: cardSupersetTarget,
+                        );
+                    return Padding(
+                      padding: EdgeInsets.only(
+                        bottom: hasSupersetNext ? 6 : 12,
+                      ),
+                      child: Column(
+                        children: [buildInsertDropZone(index), draggableCard],
+                      ),
+                    );
+                  },
                 );
               },
             ),
           ),
+          if (widget.showBottomActions)
+            Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.viewPaddingOf(context).bottom,
+              ),
+              child: _LiveWorkoutBottomBar(
+                onDiscard: _confirmDiscard,
+                onAdd: _addExerciseAtEnd,
+                onComplete: widget.onCompleteWorkout,
+              ),
+            ),
         ],
+      ),
+    );
+  }
+}
+
+class _LiveWorkoutBottomBar extends StatelessWidget {
+  const _LiveWorkoutBottomBar({
+    required this.onDiscard,
+    required this.onAdd,
+    required this.onComplete,
+  });
+
+  final VoidCallback onDiscard;
+  final VoidCallback onAdd;
+  final VoidCallback? onComplete;
+
+  @override
+  Widget build(BuildContext context) {
+    // Match exercise-row Mynaui icons (~22); slightly larger for legibility without containers.
+    const kIcon = 24.0;
+    const kPad = 10.0;
+    final islandWidth = math.min(MediaQuery.sizeOf(context).width - 32, 420.0);
+    Widget tappableIcon({
+      required VoidCallback? onTap,
+      required Widget icon,
+      required Alignment alignment,
+    }) {
+      return Expanded(
+        child: Align(
+          alignment: alignment,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              customBorder: const CircleBorder(),
+              child: Padding(padding: const EdgeInsets.all(kPad), child: icon),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return ColoredBox(
+      color: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 5),
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: Transform.translate(
+            offset: const Offset(0, 3),
+            child: Container(
+              width: islandWidth,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(kIosCornerRadius),
+                border: Border.all(color: Colors.grey.shade300),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 16,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  tappableIcon(
+                    onTap: onDiscard,
+                    alignment: Alignment.centerLeft,
+                    icon: MynauiIcon(
+                      MynauiGlyphs.trashBin,
+                      color: Colors.red.shade800,
+                      size: kIcon,
+                    ),
+                  ),
+                  tappableIcon(
+                    onTap: onAdd,
+                    alignment: Alignment.center,
+                    icon: MynauiIcon(
+                      MynauiGlyphs.addCircle,
+                      color: Colors.grey.shade900,
+                      size: kIcon,
+                    ),
+                  ),
+                  tappableIcon(
+                    onTap: onComplete,
+                    alignment: Alignment.centerRight,
+                    icon: MynauiIcon(
+                      MynauiGlyphs.checkCircle,
+                      size: kIcon,
+                      color: const Color(0xFF1B5E20),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -3316,7 +3950,7 @@ class _MetricRow extends StatelessWidget {
     required this.value,
   });
 
-  final IconData icon;
+  final Widget icon;
   final String label;
   final String value;
 
@@ -3324,7 +3958,7 @@ class _MetricRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, size: 22, color: Colors.blueGrey.shade600),
+        icon,
         const SizedBox(width: 8),
         Text(
           '$value $label',
@@ -3350,16 +3984,16 @@ class _TimerOptionChip extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(kIosCornerRadius),
         child: Ink(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
             color: kAccentColor.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(999),
+            borderRadius: BorderRadius.circular(kIosCornerRadius),
             border: Border.all(color: kAccentColor.withValues(alpha: 0.26)),
           ),
           child: Text(
-            label,
+            label.toUpperCase(),
             style: const TextStyle(
               color: kAccentColor,
               fontWeight: FontWeight.w500,
@@ -3374,12 +4008,14 @@ class _TimerOptionChip extends StatelessWidget {
 
 class _TimerSettingTile extends StatelessWidget {
   const _TimerSettingTile({
+    required this.icon,
     required this.title,
     required this.subtitle,
     required this.value,
     required this.onChanged,
   });
 
+  final String icon;
   final String title;
   final String subtitle;
   final bool value;
@@ -3388,21 +4024,26 @@ class _TimerSettingTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Colors.white.withValues(alpha: 0.82),
-            kAccentColor.withValues(alpha: 0.06),
-          ],
-        ),
-        border: Border.all(color: kAccentColor.withValues(alpha: 0.14)),
+        color: Colors.white.withValues(alpha: 0.38),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.black.withValues(alpha: 0.07)),
       ),
       child: Row(
         children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.7),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Center(
+              child: MynauiIcon(icon, size: 20, color: const Color(0xFF171717)),
+            ),
+          ),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3430,11 +4071,253 @@ class _TimerSettingTile extends StatelessWidget {
           const SizedBox(width: 12),
           CupertinoSwitch(
             value: value,
-            activeTrackColor: kAccentColor,
+            activeTrackColor: const Color(0xFF9DDC3A),
             onChanged: onChanged,
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ExerciseNotesSheet extends StatefulWidget {
+  const _ExerciseNotesSheet({
+    required this.exerciseName,
+    required this.initialNotes,
+    required this.initialUpdatedAt,
+    required this.onChanged,
+  });
+
+  final String exerciseName;
+  final String initialNotes;
+  final DateTime? initialUpdatedAt;
+  final void Function(String notes, DateTime? updatedAt) onChanged;
+
+  @override
+  State<_ExerciseNotesSheet> createState() => _ExerciseNotesSheetState();
+}
+
+class _ExerciseNotesSheetState extends State<_ExerciseNotesSheet> {
+  late final TextEditingController _controller;
+  DateTime? _updatedAt;
+
+  bool get _hasText => _controller.text.trim().isNotEmpty;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialNotes)
+      ..selection = TextSelection.collapsed(offset: widget.initialNotes.length);
+    _updatedAt = widget.initialUpdatedAt;
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _handleChanged(String value) {
+    final updatedAt = value.trim().isEmpty ? null : DateTime.now();
+    setState(() => _updatedAt = updatedAt);
+    widget.onChanged(value, updatedAt);
+  }
+
+  Future<void> _copyNotes() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Notes copied')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final timestamp = _updatedAt ?? DateTime.now();
+    final timestampLabel = TimeOfDay.fromDateTime(timestamp).format(context);
+
+    return LiftMenuSheet(
+      title: 'Exercise notes',
+      subtitle:
+          'Capture setup cues, fatigue notes, or reminders for ${widget.exerciseName}.',
+      safeAreaBottomFactor: 0.75,
+      children: [
+        SingleChildScrollView(
+          child: Column(
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.72),
+                  borderRadius: BorderRadius.circular(kIosCornerRadius),
+                  border: Border.all(
+                    color: Colors.black.withValues(alpha: 0.08),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.04),
+                      blurRadius: 14,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 62,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            timestampLabel,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.black.withValues(alpha: 0.72),
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.92),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: const Center(
+                              child: MynauiIcon(
+                                MynauiGlyphs.notebook,
+                                size: 20,
+                                color: Color(0xFF171717),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: TextField(
+                        controller: _controller,
+                        onChanged: _handleChanged,
+                        minLines: 8,
+                        maxLines: 8,
+                        autofocus: !_hasText,
+                        textCapitalization: TextCapitalization.sentences,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          height: 1.4,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFF171717),
+                        ),
+                        decoration: InputDecoration(
+                          isCollapsed: true,
+                          border: InputBorder.none,
+                          hintText:
+                              'Write quick cues, setup changes, or anything you want to remember for the next set.',
+                          hintStyle: TextStyle(
+                            fontSize: 15,
+                            height: 1.45,
+                            color: Colors.black.withValues(alpha: 0.32),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _hasText ? _copyNotes : null,
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(48),
+                        backgroundColor: Colors.white.withValues(alpha: 0.66),
+                        side: BorderSide(
+                          color: Colors.black.withValues(alpha: 0.08),
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(kIosCornerRadius),
+                        ),
+                      ),
+                      child: Text(
+                        'COPY',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black.withValues(alpha: 0.72),
+                          letterSpacing: 0.4,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed:
+                          _hasText
+                              ? () {
+                                _controller.clear();
+                                _handleChanged('');
+                              }
+                              : null,
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(48),
+                        backgroundColor: Colors.white.withValues(alpha: 0.66),
+                        side: BorderSide(
+                          color: Colors.black.withValues(alpha: 0.08),
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(kIosCornerRadius),
+                        ),
+                      ),
+                      child: Text(
+                        'CLEAR',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black.withValues(alpha: 0.72),
+                          letterSpacing: 0.4,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(52),
+                    backgroundColor: const Color(0xFF171717),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(kIosCornerRadius),
+                    ),
+                  ),
+                  child: const Text(
+                    'DONE',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -3450,26 +4333,21 @@ class _SwipeDeleteReveal extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(borderRadius),
-        color: Colors.red.shade50.withValues(alpha: 0.94),
-        border: Border.all(color: Colors.red.shade100),
+    return ClipRRect(
+      borderRadius: BorderRadius.only(
+        topRight: Radius.circular(borderRadius),
+        bottomRight: Radius.circular(borderRadius),
       ),
-      alignment: Alignment.centerRight,
-      child: Padding(
-        padding: const EdgeInsets.only(right: 12),
-        child: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: Colors.red.shade100.withValues(alpha: 0.7),
-            shape: BoxShape.circle,
-          ),
-          child: Icon(
-            Icons.delete_outline_rounded,
-            color: Colors.red.shade400,
-            size: iconSize,
+      child: SizedBox.expand(
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: Padding(
+            padding: const EdgeInsets.only(right: 14),
+            child: MynauiIcon(
+              MynauiGlyphs.trashBin,
+              color: Colors.red.shade400,
+              size: iconSize,
+            ),
           ),
         ),
       ),
@@ -3496,7 +4374,7 @@ class _NextSetPreviewCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kIosCornerRadius),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
@@ -3506,13 +4384,13 @@ class _NextSetPreviewCard extends StatelessWidget {
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kIosCornerRadius),
         child: BackdropFilter(
           filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
           child: Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(kIosCornerRadius),
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
@@ -3522,7 +4400,7 @@ class _NextSetPreviewCard extends StatelessWidget {
             ),
             child: Row(
               children: [
-                const _ExerciseThumb(size: 60),
+                _ExerciseThumb(size: 60, label: exerciseName),
                 const SizedBox(width: 10),
                 Expanded(
                   child:
@@ -3575,12 +4453,12 @@ class _NextSetPreviewCard extends StatelessWidget {
                 const SizedBox(width: 10),
                 InkWell(
                   onTap: onComplete,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(kIosCornerRadius),
                   child: Ink(
-                    width: 74,
-                    height: 74,
+                    width: 48,
+                    height: 48,
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(kIosCornerRadius),
                       border: Border.all(
                         color:
                             onComplete == null
@@ -3600,13 +4478,15 @@ class _NextSetPreviewCard extends StatelessWidget {
                                 ],
                       ),
                     ),
-                    child: Icon(
-                      Icons.check_rounded,
-                      size: 38,
-                      color:
-                          onComplete == null
-                              ? Colors.grey.shade500
-                              : Colors.teal.shade700,
+                    child: Center(
+                      child: MynauiIcon(
+                        MynauiGlyphs.checkCircle,
+                        size: 26,
+                        color:
+                            onComplete == null
+                                ? Colors.grey.shade500
+                                : Colors.teal.shade700,
+                      ),
                     ),
                   ),
                 ),
@@ -3655,10 +4535,12 @@ class _LiveExerciseCard extends StatelessWidget {
     required this.run,
     required this.isCurrentExercise,
     required this.onToggle,
+    required this.onOpenDetails,
     required this.setDisplayLabelForRow,
     required this.restFormatter,
     required this.weightFormatter,
     required this.onStats,
+    required this.onNotes,
     required this.onSwap,
     required this.onAddSet,
     required this.onDeleteRow,
@@ -3674,10 +4556,12 @@ class _LiveExerciseCard extends StatelessWidget {
   final _LiveExerciseRun run;
   final bool isCurrentExercise;
   final VoidCallback onToggle;
+  final VoidCallback onOpenDetails;
   final String Function(int rowIndex) setDisplayLabelForRow;
   final String Function(int) restFormatter;
   final String Function(double) weightFormatter;
   final VoidCallback onStats;
+  final VoidCallback onNotes;
   final VoidCallback onSwap;
   final VoidCallback onAddSet;
   final void Function(int rowIndex) onDeleteRow;
@@ -3693,74 +4577,96 @@ class _LiveExerciseCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final exercise = run.exercise;
     final durationChip = '${exercise.estimatedMinutes} MINS';
+    final hasNotes = run.notes.trim().isNotEmpty;
 
     return GlassContainer(
-      borderRadius: 16,
+      borderRadius: kIosCornerRadius,
       blur: 12,
       showSheen: false,
       padding: const EdgeInsets.all(8),
       child: Column(
         children: [
-          InkWell(
-            onTap: onToggle,
-            borderRadius: BorderRadius.circular(12),
-            child: Padding(
-              padding: const EdgeInsets.all(2),
-              child: Row(
-                children: [
-                  _ExerciseThumb(label: exercise.name),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+          Row(
+            children: [
+              Expanded(
+                child: InkWell(
+                  onTap: onOpenDetails,
+                  borderRadius: BorderRadius.circular(kIosCornerRadius),
+                  child: Padding(
+                    padding: const EdgeInsets.all(2),
+                    child: Row(
                       children: [
-                        Text(
-                          exercise.name,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${exercise.presetRows.length} Sets',
-                          style: TextStyle(
-                            color: Colors.black.withValues(alpha: 0.72),
-                            fontWeight: FontWeight.w600,
+                        _ExerciseThumb(label: exercise.name),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                exercise.name,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${exercise.presetRows.length} Sets',
+                                style: TextStyle(
+                                  color: Colors.black.withValues(alpha: 0.72),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: kAccentColor.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      durationChip,
-                      style: const TextStyle(
-                        color: kAccentColor,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    run.isExpanded
-                        ? Icons.keyboard_arrow_up_rounded
-                        : Icons.keyboard_arrow_down_rounded,
-                    size: 26,
-                    color: Colors.grey.shade700,
-                  ),
-                ],
+                ),
               ),
-            ),
+              const SizedBox(width: 8),
+              InkWell(
+                onTap: onToggle,
+                borderRadius: BorderRadius.circular(kIosCornerRadius),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 6,
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: kAccentColor.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(kIosCornerRadius),
+                        ),
+                        child: Text(
+                          durationChip,
+                          style: const TextStyle(
+                            color: kAccentColor,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        run.isExpanded
+                            ? Icons.keyboard_arrow_up_rounded
+                            : Icons.keyboard_arrow_down_rounded,
+                        size: 26,
+                        color: Colors.grey.shade700,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
           if (run.isExpanded) ...[
             const SizedBox(height: 10),
@@ -3780,7 +4686,7 @@ class _LiveExerciseCard extends StatelessWidget {
               return Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(kIosCornerRadius),
                   child: Dismissible(
                     key: ValueKey(
                       '${exercise.id}-row-$rowIndex-${row.label}-${row.reps}-${row.weightKg}-${row.restSeconds}',
@@ -3799,8 +4705,8 @@ class _LiveExerciseCard extends StatelessWidget {
                       return false;
                     },
                     secondaryBackground: const _SwipeDeleteReveal(
-                      borderRadius: 12,
-                      iconSize: 20,
+                      borderRadius: kIosCornerRadius,
+                      iconSize: 18,
                     ),
                     onDismissed: (_) => onDeleteRow(rowIndex),
                     child: _LiveSetRowTile(
@@ -3827,27 +4733,41 @@ class _LiveExerciseCard extends StatelessWidget {
                 ),
               );
             }),
-            const SizedBox(height: 2),
+            const SizedBox(height: 6),
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Expanded(
-                  child: _LiveExerciseActionButton(
-                    label: 'Stats',
-                    onPressed: onStats,
+                _LiveExerciseIconButton(
+                  onPressed: onStats,
+                  child: MynauiIcon(
+                    MynauiGlyphs.alignBottom,
+                    size: 22,
+                    color: kAccentColor,
                   ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _LiveExerciseActionButton(
-                    label: 'Add set',
-                    onPressed: onAddSet,
+                _LiveExerciseIconButton(
+                  onPressed: onNotes,
+                  active: hasNotes,
+                  child: MynauiIcon(
+                    MynauiGlyphs.notebook,
+                    size: 22,
+                    color: kAccentColor,
                   ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _LiveExerciseActionButton(
-                    label: 'Swap',
-                    onPressed: onSwap,
+                _LiveExerciseIconButton(
+                  onPressed: onAddSet,
+                  child: MynauiIcon(
+                    MynauiGlyphs.addCircle,
+                    size: 22,
+                    color: kAccentColor,
+                  ),
+                ),
+                _LiveExerciseIconButton(
+                  onPressed: onSwap,
+                  child: MynauiIcon(
+                    MynauiGlyphs.sortHorizontal,
+                    size: 22,
+                    color: kAccentColor,
                   ),
                 ),
               ],
@@ -3876,7 +4796,9 @@ class _LiveExerciseActionButton extends StatelessWidget {
         backgroundColor: Colors.white.withValues(alpha: 0.70),
         side: BorderSide(color: kAccentColor.withValues(alpha: 0.22)),
         padding: const EdgeInsets.symmetric(vertical: 12),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(kIosCornerRadius),
+        ),
         textStyle: const TextStyle(
           fontWeight: FontWeight.w400,
           letterSpacing: 0.2,
@@ -3890,6 +4812,53 @@ class _LiveExerciseActionButton extends StatelessWidget {
         textAlign: TextAlign.center,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+}
+
+class _LiveExerciseIconButton extends StatelessWidget {
+  const _LiveExerciseIconButton({
+    required this.onPressed,
+    this.active = false,
+    this.icon,
+    this.child,
+  }) : assert(icon != null || child != null);
+
+  final VoidCallback onPressed;
+  final bool active;
+  final IconData? icon;
+  final Widget? child;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(kIosCornerRadius),
+          child: Ink(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(kIosCornerRadius),
+              color:
+                  active
+                      ? const Color(0xFFE6F1EA)
+                      : Colors.white.withValues(alpha: 0.9),
+              border: Border.all(
+                color:
+                    active
+                        ? kAccentColor.withValues(alpha: 0.34)
+                        : kAccentColor.withValues(alpha: 0.25),
+              ),
+            ),
+            child: Center(
+              child: child ?? Icon(icon!, size: 22, color: kAccentColor),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -3925,7 +4894,7 @@ class _LiveSupersetBadge extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
           color: kAccentColor.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(999),
+          borderRadius: BorderRadius.circular(kIosCornerRadius),
           border: Border.all(color: kAccentColor.withValues(alpha: 0.18)),
         ),
         child: const Text(
@@ -3960,13 +4929,13 @@ class _LiveExerciseDragGhost extends StatelessWidget {
     return Opacity(
       opacity: 0.96,
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(kIosCornerRadius),
         child: BackdropFilter(
           filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
           child: Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(22),
+              borderRadius: BorderRadius.circular(kIosCornerRadius),
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
@@ -3992,7 +4961,7 @@ class _LiveExerciseDragGhost extends StatelessWidget {
                       width: 110,
                       height: 56,
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(999),
+                        borderRadius: BorderRadius.circular(kIosCornerRadius),
                         gradient: RadialGradient(
                           colors: [
                             _glassGreyTint(0.16),
@@ -4009,7 +4978,7 @@ class _LiveExerciseDragGhost extends StatelessWidget {
                       width: 56,
                       height: 56,
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(16),
+                        borderRadius: BorderRadius.circular(kIosCornerRadius),
                         gradient: LinearGradient(
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
@@ -4072,7 +5041,9 @@ class _LiveExerciseDragGhost extends StatelessWidget {
                                 ),
                                 decoration: BoxDecoration(
                                   color: kAccentColor.withValues(alpha: 0.10),
-                                  borderRadius: BorderRadius.circular(999),
+                                  borderRadius: BorderRadius.circular(
+                                    kIosCornerRadius,
+                                  ),
                                   border: Border.all(
                                     color: kAccentColor.withValues(alpha: 0.16),
                                   ),
@@ -4167,7 +5138,7 @@ class _LiveSetRowTile extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       decoration: BoxDecoration(
         color: palette.bg,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(kIosCornerRadius),
         border: Border.all(color: palette.border),
         boxShadow: [
           BoxShadow(
@@ -4217,9 +5188,9 @@ class _LiveSetRowTile extends StatelessWidget {
               child: switch (status) {
                 _LiveSetStatus.done => InkWell(
                   onTap: onUndo,
-                  borderRadius: BorderRadius.circular(999),
-                  child: Icon(
-                    Icons.check_circle_rounded,
+                  borderRadius: BorderRadius.circular(kIosCornerRadius),
+                  child: MynauiIcon(
+                    MynauiGlyphs.checkCircle,
                     color:
                         onUndo == null
                             ? Colors.teal.shade300
@@ -4229,7 +5200,7 @@ class _LiveSetRowTile extends StatelessWidget {
                 ),
                 _LiveSetStatus.active => InkWell(
                   onTap: onCheck,
-                  borderRadius: BorderRadius.circular(999),
+                  borderRadius: BorderRadius.circular(kIosCornerRadius),
                   child: Icon(
                     Icons.radio_button_unchecked_rounded,
                     color: kAccentColor,
@@ -4238,7 +5209,7 @@ class _LiveSetRowTile extends StatelessWidget {
                 ),
                 _LiveSetStatus.upcoming => InkWell(
                   onTap: onCheck,
-                  borderRadius: BorderRadius.circular(999),
+                  borderRadius: BorderRadius.circular(kIosCornerRadius),
                   child: Icon(
                     Icons.radio_button_unchecked_rounded,
                     color: Colors.grey.shade500,
@@ -4275,7 +5246,7 @@ class _RowValue extends StatelessWidget {
               margin: const EdgeInsets.symmetric(horizontal: 4),
               padding: const EdgeInsets.symmetric(vertical: 5),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(kIosCornerRadius),
                 border: Border.all(
                   color: Colors.grey.shade400.withValues(alpha: 0.9),
                 ),
@@ -4305,8 +5276,60 @@ class _RowValue extends StatelessWidget {
 
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(kIosCornerRadius),
       child: child,
+    );
+  }
+}
+
+class _LiftCatalogFilterChip extends StatelessWidget {
+  const _LiftCatalogFilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(kIosChipRadius),
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        child: AnimatedContainer(
+          duration: LiftMotion.fast,
+          curve: LiftMotion.standardCurve,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            color:
+                selected ? kAccentColor : Colors.white.withValues(alpha: 0.58),
+            borderRadius: BorderRadius.circular(kIosChipRadius),
+            border: Border.all(
+              color:
+                  selected
+                      ? kAccentColor
+                      : Colors.black.withValues(alpha: 0.08),
+            ),
+          ),
+          child: Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              color:
+                  selected
+                      ? Colors.white
+                      : Colors.black.withValues(alpha: 0.72),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -4345,44 +5368,30 @@ class _LiveSwapExerciseTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+    return Material(
+      color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color:
-                  isCurrent
-                      ? kAccentColor.withValues(alpha: 0.35)
-                      : Colors.grey.shade200,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.02),
-                blurRadius: 8,
-                spreadRadius: 0.3,
-                offset: Offset.zero,
-              ),
-            ],
-          ),
+        borderRadius: BorderRadius.circular(kIosCornerRadius),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               _ExerciseThumb(size: 50, label: title),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 14,
+                        color:
+                            isCurrent ? kAccentColor : const Color(0xFF171717),
                       ),
                     ),
                     const SizedBox(height: 3),
@@ -4390,20 +5399,53 @@ class _LiveSwapExerciseTile extends StatelessWidget {
                       subtitle,
                       style: TextStyle(
                         fontSize: 12,
-                        color: Colors.grey.shade600,
+                        color:
+                            isCurrent
+                                ? kAccentColor.withValues(alpha: 0.72)
+                                : Colors.grey.shade600,
                       ),
                     ),
                   ],
                 ),
               ),
               if (isCurrent)
-                const Icon(Icons.check_rounded, color: kAccentColor)
+                MynauiIcon(
+                  MynauiGlyphs.checkUnread,
+                  size: 22,
+                  color: kAccentColor,
+                )
               else
                 Icon(Icons.chevron_right_rounded, color: Colors.grey.shade400),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _LiveSwapExerciseDivider extends StatelessWidget {
+  const _LiveSwapExerciseDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final paddedW = math.max(0.0, constraints.maxWidth - 16);
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Center(
+            child: SizedBox(
+              width: paddedW * 0.5,
+              child: Divider(
+                height: 1,
+                thickness: 1,
+                color: Theme.of(context).dividerTheme.color,
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -4416,7 +5458,7 @@ class _ExerciseThumb extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(12);
+    final radius = BorderRadius.circular(kExerciseImageRadius);
 
     return Container(
       width: size,
@@ -4437,14 +5479,15 @@ class _ExerciseThumb extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           Image.network(
-            _kExercisePlaceholderImageUrl,
+            exerciseDemoImageUrl(label ?? ''),
             fit: BoxFit.cover,
+            gaplessPlayback: true,
             errorBuilder:
                 (context, error, stackTrace) => Container(
                   color: _glassGreyTint(0.18),
                   alignment: Alignment.center,
-                  child: Icon(
-                    Icons.image_outlined,
+                  child: MynauiIcon(
+                    MynauiGlyphs.galleryMinimalistic,
                     color: Colors.grey.shade500,
                     size: size * 0.34,
                   ),

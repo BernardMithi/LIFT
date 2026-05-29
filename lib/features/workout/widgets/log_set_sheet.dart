@@ -7,6 +7,7 @@ Future<LogSetDraft?> showLogSetSheet(
   required double initialWeightKg,
   required int initialReps,
   required int initialRestSeconds,
+  String? exerciseTitle,
 }) {
   return showModalBottomSheet<LogSetDraft>(
     context: context,
@@ -17,6 +18,7 @@ Future<LogSetDraft?> showLogSetSheet(
         initialWeightKg: initialWeightKg,
         initialReps: initialReps,
         initialRestSeconds: initialRestSeconds,
+        exerciseTitle: exerciseTitle,
       );
     },
   );
@@ -27,11 +29,13 @@ class _LogSetSheet extends StatefulWidget {
     required this.initialWeightKg,
     required this.initialReps,
     required this.initialRestSeconds,
+    this.exerciseTitle,
   });
 
   final double initialWeightKg;
   final int initialReps;
   final int initialRestSeconds;
+  final String? exerciseTitle;
 
   @override
   State<_LogSetSheet> createState() => _LogSetSheetState();
@@ -93,7 +97,9 @@ class _LogSetSheetState extends State<_LogSetSheet> {
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
         decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(kIosCornerRadius),
+          ),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -105,7 +111,7 @@ class _LogSetSheetState extends State<_LogSetSheet> {
                 height: 5,
                 decoration: BoxDecoration(
                   color: Colors.black.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(999),
+                  borderRadius: BorderRadius.circular(kIosCornerRadius),
                 ),
               ),
             ),
@@ -114,6 +120,18 @@ class _LogSetSheetState extends State<_LogSetSheet> {
               'Log set',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
             ),
+            if (widget.exerciseTitle != null &&
+                widget.exerciseTitle!.trim().isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                widget.exerciseTitle!.trim(),
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             Row(
               children: [
@@ -160,7 +178,8 @@ class _LogSetSheetState extends State<_LogSetSheet> {
                       .map(
                         (seconds) => ChoiceChip(
                           label: Text(
-                            '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}',
+                            '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}'
+                                .toUpperCase(),
                           ),
                           selected: _restSeconds == seconds,
                           selectedColor: kAccentColor.withValues(alpha: 0.14),
@@ -212,7 +231,7 @@ class _InputTile extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(kIosCornerRadius),
         border: Border.all(color: Colors.grey.shade200),
       ),
       child: Column(
@@ -248,15 +267,18 @@ class _QuickButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      borderRadius: BorderRadius.circular(999),
+      borderRadius: BorderRadius.circular(kIosCornerRadius),
       onTap: onTap,
       child: Ink(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(999),
+          borderRadius: BorderRadius.circular(kIosCornerRadius),
           border: Border.all(color: Colors.grey.shade300),
         ),
-        child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+        child: Text(
+          label.toUpperCase(),
+          style: const TextStyle(fontWeight: FontWeight.w500),
+        ),
       ),
     );
   }

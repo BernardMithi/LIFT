@@ -1,18 +1,38 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:lift/app/theme.dart';
+import 'package:lift/features/progress/leg_day_trends/leg_day_trends_page.dart';
+import 'package:lift/features/workout/exercise_details/exercise_detail_page.dart';
+import 'package:lift/shared/exercise_demo_images.dart';
 import 'package:lift/shared/models/workout_history_entry.dart';
 import 'package:lift/shared/models/workout_template.dart';
 import 'package:lift/shared/widgets/lift_island_header.dart';
+import 'package:lift/shared/widgets/lift_menu_sheet.dart';
+import 'package:lift/shared/widgets/scroll_linked_top_blur_scrim.dart';
 import 'package:lift/shared/widgets/surfaces.dart';
-
-const String _kExercisePlaceholderImageUrl =
-    'https://blocks.astratic.com/img/general-img-landscape.png';
+import 'package:lift/shared/icons/mynaui_glyphs.dart';
+import 'package:lift/shared/icons/mynaui_icon.dart';
+import 'package:lift/shared/widgets/workout_detail_action_island.dart';
+import 'package:lift/shared/widgets/workout_template_hero_image.dart';
 
 enum _WorkoutMenuAction { edit, review, share }
+
+Widget _alignedWorkoutBackIcon({
+  Color color = kLiftIslandOnFrosted,
+  double size = 22,
+}) {
+  return Transform.translate(
+    offset: const Offset(1.0, 0),
+    child: MynauiIcon(MynauiGlyphs.altArrowLeft, color: color, size: size),
+  );
+}
+
+void _openExerciseDetail(
+  BuildContext context,
+  WorkoutTemplateExercise exercise,
+) {
+  pushExerciseDetailPage(context, exerciseName: exercise.name);
+}
 
 class TodayWorkoutDetailScreen extends StatefulWidget {
   const TodayWorkoutDetailScreen({
@@ -21,12 +41,19 @@ class TodayWorkoutDetailScreen extends StatefulWidget {
     required this.history,
     required this.onEdit,
     required this.onStart,
+
+    /// When true (e.g. home hero or calendar row for **today**), primary is Start.
+    /// When false, primary is Edit — user can still open trends from the secondary control.
+    this.allowStart = true,
+    this.heroUnderHeader = true,
   });
 
   final WorkoutTemplate template;
   final List<WorkoutHistoryEntry> history;
   final VoidCallback onEdit;
   final VoidCallback onStart;
+  final bool allowStart;
+  final bool heroUnderHeader;
 
   @override
   State<TodayWorkoutDetailScreen> createState() =>
@@ -35,6 +62,7 @@ class TodayWorkoutDetailScreen extends StatefulWidget {
 
 class _TodayWorkoutDetailScreenState extends State<TodayWorkoutDetailScreen> {
   final Set<String> _expandedExerciseIds = <String>{};
+  final ScrollController _detailScrollController = ScrollController();
 
   @override
   void initState() {
@@ -42,6 +70,12 @@ class _TodayWorkoutDetailScreenState extends State<TodayWorkoutDetailScreen> {
     if (widget.template.exercises.isNotEmpty) {
       _expandedExerciseIds.add(widget.template.exercises.first.id);
     }
+  }
+
+  @override
+  void dispose() {
+    _detailScrollController.dispose();
+    super.dispose();
   }
 
   List<WorkoutHistoryEntry> get _historyForTemplate {
@@ -54,28 +88,27 @@ class _TodayWorkoutDetailScreenState extends State<TodayWorkoutDetailScreen> {
     return sorted;
   }
 
+  String _formatDuration(int minutes) {
+    if (minutes >= 60) {
+      final hours = minutes ~/ 60;
+      final mins = minutes % 60;
+      if (mins == 0) return '$hours hour';
+      return '${hours}hr ${mins}mins';
+    }
+    return '$minutes mins';
+  }
+
   String _formatRest(int seconds) {
     final minutes = seconds ~/ 60;
     final rem = (seconds % 60).toString().padLeft(2, '0');
     return '$minutes:$rem';
   }
 
-  String _formatWeight(double value) {
-    if (value == value.roundToDouble()) {
-      return '${value.round()}KG';
-    }
-    return '${value.toStringAsFixed(1)}KG';
-  }
-
   void _openTrends() {
     Navigator.push<void>(
       context,
       MaterialPageRoute(
-        builder:
-            (_) => _WorkoutTrendsScreen(
-              workoutName: widget.template.name,
-              entries: _historyForTemplate,
-            ),
+        builder: (_) => LegDayTrendsPage(template: widget.template),
       ),
     );
   }
@@ -110,53 +143,52 @@ class _TodayWorkoutDetailScreenState extends State<TodayWorkoutDetailScreen> {
     final action = await showModalBottomSheet<_WorkoutMenuAction>(
       context: context,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.18),
+      barrierColor: Colors.black.withValues(alpha: 0.30),
       isScrollControlled: false,
       builder: (sheetContext) {
         return SafeArea(
           top: false,
           bottom: false,
-          child: GlassContainer(
-            borderRadius: 24,
-            blur: 18,
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 42,
-                  height: 5,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade400,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
+          child: LiftMenuSheet(
+            title: 'Workout options',
+            subtitle: widget.template.name,
+            children: [
+              LiftMenuActionTile(
+                icon: MynauiIcon(
+                  MynauiGlyphs.editOne,
+                  size: 22,
+                  color: kAccentColor,
                 ),
-                const SizedBox(height: 8),
-                _WorkoutActionRow(
-                  icon: PhosphorIconsRegular.pencilSimple,
-                  label: 'Edit workout',
-                  onTap: () {
-                    Navigator.of(sheetContext).pop(_WorkoutMenuAction.edit);
-                  },
+                title: 'Edit workout',
+                onTap: () {
+                  Navigator.of(sheetContext).pop(_WorkoutMenuAction.edit);
+                },
+              ),
+              const SizedBox(height: 8),
+              LiftMenuActionTile(
+                icon: const MynauiIcon(
+                  MynauiGlyphs.clipboardList,
+                  size: 22,
+                  color: kAccentColor,
                 ),
-                const SizedBox(height: 8),
-                _WorkoutActionRow(
-                  icon: PhosphorIconsRegular.notepad,
-                  label: 'Review',
-                  onTap: () {
-                    Navigator.of(sheetContext).pop(_WorkoutMenuAction.review);
-                  },
+                title: 'Review',
+                onTap: () {
+                  Navigator.of(sheetContext).pop(_WorkoutMenuAction.review);
+                },
+              ),
+              const SizedBox(height: 8),
+              LiftMenuActionTile(
+                icon: const MynauiIcon(
+                  MynauiGlyphs.squareShareLine,
+                  size: 22,
+                  color: kAccentColor,
                 ),
-                const SizedBox(height: 8),
-                _WorkoutActionRow(
-                  icon: PhosphorIconsRegular.shareFat,
-                  label: 'Share',
-                  onTap: () {
-                    Navigator.of(sheetContext).pop(_WorkoutMenuAction.share);
-                  },
-                ),
-              ],
-            ),
+                title: 'Share',
+                onTap: () {
+                  Navigator.of(sheetContext).pop(_WorkoutMenuAction.share);
+                },
+              ),
+            ],
           ),
         );
       },
@@ -187,369 +219,429 @@ Exercises: ${widget.template.exercises.length}
 
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
+    _showWorkoutDetailSnackBar('Workout info copied to clipboard');
+  }
+
+  void _showWorkoutDetailSnackBar(String message) {
+    const gapAboveBottomIsland = 12.0;
+    final bottomMargin =
+        kShellFloatingNavBottomInset +
+        kLiftIslandHeaderHeight +
+        gapAboveBottomIsland;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Workout info copied to clipboard')),
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        margin: EdgeInsets.fromLTRB(16, 0, 16, bottomMargin),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).viewPadding.bottom;
-    const bottomActionRowHeight = 64.0;
-    const bottomActionRowMargin = 14.0;
+    final topInset = MediaQuery.paddingOf(context).top;
+
+    // The floating action island is already positioned above the home indicator,
+    // so only reserve to the top of the island plus a small visual gap.
+    const gapAboveBottomIsland = 10.0;
     final listBottomPadding =
-        bottomInset + bottomActionRowHeight + bottomActionRowMargin + 8;
+        kShellFloatingNavBottomInset +
+        kLiftIslandHeaderHeight +
+        gapAboveBottomIsland;
+
+    final exercises = widget.template.exercises;
+    final totalExercises = exercises.length;
+    final totalSets = exercises.fold<int>(
+      0,
+      (sum, ex) => sum + ex.presetRows.length,
+    );
+    final totalRestSeconds = exercises.fold<int>(
+      0,
+      (sum, ex) =>
+          sum +
+          ex.presetRows.fold<int>(0, (inner, row) => inner + row.restSeconds),
+    );
+    final totalRestLabel = _formatRest(totalRestSeconds);
+
+    const islandTopOffset = 10.0;
+    const sectionGap = 12.0;
+    final islandTop = topInset + islandTopOffset;
+    final listTopPadding =
+        widget.heroUnderHeader
+            ? 0.0
+            : islandTop + kLiftIslandHeaderHeight + kIslandHeaderGap;
+    final topOverlayHeight =
+        islandTop +
+        kLiftIslandHeaderHeight +
+        (widget.heroUnderHeader ? 36 : kIslandHeaderGap);
 
     return Scaffold(
-      extendBody: true,
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        bottom: false,
-        child: Stack(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-              child: Column(
-                children: [
-                  LiftIslandHeader(
-                    title: widget.template.name.toUpperCase(),
-                    leading: LiftIslandHeaderAction(
-                      onTap: () => Navigator.of(context).pop(),
-                      child: const Icon(
-                        Icons.arrow_back_ios_new_rounded,
-                        color: Colors.white,
-                        size: 22,
-                      ),
-                    ),
-                    trailing: LiftIslandHeaderAction(
-                      onTap: _showWorkoutOptionsSheet,
-                      child: const PhosphorIcon(
-                        PhosphorIconsRegular.dotsThreeOutlineVertical,
-                        color: Colors.white,
-                        size: 22,
-                      ),
-                    ),
+      extendBody: false,
+      resizeToAvoidBottomInset: false,
+      backgroundColor: const Color(0xFFF7F7F8),
+      body: Stack(
+        children: [
+          ListView(
+            controller: _detailScrollController,
+            primary: false,
+            padding: EdgeInsets.fromLTRB(
+              kPagePadding,
+              listTopPadding,
+              kPagePadding,
+              listBottomPadding,
+            ),
+            children: [
+              _HeroWorkoutCard(
+                template: widget.template,
+                durationLabel: _formatDuration(
+                  widget.template.estimatedDurationMinutes,
+                ),
+              ),
+              const SizedBox(height: sectionGap),
+              _WorkoutTemplateSummary(
+                exerciseCount: totalExercises,
+                totalSetCount: totalSets,
+                totalRestLabel: totalRestLabel,
+                focusTags: widget.template.focusTags,
+              ),
+              const SizedBox(height: sectionGap),
+              ...exercises.map((exercise) {
+                final isExpanded = _expandedExerciseIds.contains(exercise.id);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: sectionGap),
+                  child: _ExercisePreviewCard(
+                    exercise: exercise,
+                    restFormatter: _formatRest,
+                    isExpanded: isExpanded,
+                    onOpenDetails: () => _openExerciseDetail(context, exercise),
+                    onToggle: () {
+                      setState(() {
+                        if (isExpanded) {
+                          _expandedExerciseIds.remove(exercise.id);
+                        } else {
+                          _expandedExerciseIds.add(exercise.id);
+                        }
+                      });
+                    },
                   ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: ListView(
-                      padding: EdgeInsets.only(bottom: listBottomPadding),
-                      children: [
-                        _HeroWorkoutCard(
-                          template: widget.template,
-                          durationLabel:
-                              '${widget.template.estimatedDurationMinutes} min',
-                          exercisesLabel:
-                              '${widget.template.exercises.length} exercises',
-                        ),
-                        const SizedBox(height: 12),
-                        ...widget.template.exercises.map((exercise) {
-                          final isExpanded = _expandedExerciseIds.contains(
-                            exercise.id,
-                          );
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: _ExercisePreviewCard(
-                              exercise: exercise,
-                              restFormatter: _formatRest,
-                              weightFormatter: _formatWeight,
-                              isExpanded: isExpanded,
-                              onToggle: () {
-                                setState(() {
-                                  if (isExpanded) {
-                                    _expandedExerciseIds.remove(exercise.id);
-                                  } else {
-                                    _expandedExerciseIds.add(exercise.id);
-                                  }
-                                });
-                              },
-                            ),
-                          );
-                        }),
-                      ],
-                    ),
-                  ),
-                ],
+                );
+              }),
+            ],
+          ),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: topOverlayHeight,
+            child: IgnorePointer(
+              child: ScrollLinkedTopBlurScrim(
+                scrollController: _detailScrollController,
+                scrollRampDistance: 120,
+                maxBlurSigma: 16,
+                topTint: const Color(0xFFF7F7F8),
+                maxTintOpacity: 0.28,
               ),
             ),
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 14,
-              child: SafeArea(
-                top: false,
-                bottom: false,
-                child: Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(32),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.18),
-                        blurRadius: 30,
-                        spreadRadius: 2,
-                        offset: const Offset(0, 16),
-                      ),
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.10),
-                        blurRadius: 12,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(32),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-                      child: Container(
-                        height: 76,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.97),
-                          borderRadius: BorderRadius.circular(32),
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(18),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(
-                                        alpha: 0.08,
-                                      ),
-                                      blurRadius: 12,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: OutlinedButton(
-                                  onPressed: _openTrends,
-                                  style: OutlinedButton.styleFrom(
-                                    backgroundColor: Colors.transparent,
-                                    foregroundColor: kAccentColor,
-                                    side: BorderSide(
-                                      color: kAccentColor.withValues(
-                                        alpha: 0.55,
-                                      ),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 14,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(18),
-                                    ),
-                                  ),
-                                  child: const Text(
-                                    'Trends',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: kAccentColor,
-                                  borderRadius: BorderRadius.circular(18),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(
-                                        alpha: 0.12,
-                                      ),
-                                      blurRadius: 12,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: FilledButton(
-                                  onPressed: _handleStart,
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: Colors.transparent,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 14,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(18),
-                                    ),
-                                  ),
-                                  child: const Text(
-                                    'Start',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
+          ),
+          Positioned(
+            top: islandTop,
+            left: kPagePadding,
+            right: kPagePadding,
+            child: LiftIslandHeader(
+              center: const SizedBox.shrink(),
+              scrollController: _detailScrollController,
+              collapseScrollDistance: 28,
+              leading: LiftIslandHeaderAction(
+                onTap: () => Navigator.of(context).pop(),
+                child: _alignedWorkoutBackIcon(),
+              ),
+              trailing: LiftIslandHeaderAction(
+                onTap: _showWorkoutOptionsSheet,
+                child: const MynauiIcon(
+                  MynauiGlyphs.menuDotsCircle,
+                  color: kLiftIslandOnFrosted,
+                  size: 22,
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: kShellFloatingNavBottomInset,
+            child: SafeArea(
+              top: false,
+              bottom: false,
+              child: _DetailBottomBar(
+                onTrends: _openTrends,
+                allowStart: widget.allowStart,
+                onStart: _handleStart,
+                onEdit: _handleEdit,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _WorkoutActionRow extends StatelessWidget {
-  const _WorkoutActionRow({
-    required this.icon,
-    required this.label,
-    required this.onTap,
+class _DetailBottomBar extends StatelessWidget {
+  const _DetailBottomBar({
+    required this.onTrends,
+    required this.allowStart,
+    required this.onStart,
+    required this.onEdit,
   });
 
-  final PhosphorIconData icon;
-  final String label;
-  final VoidCallback onTap;
+  final VoidCallback onTrends;
+  final bool allowStart;
+  final VoidCallback onStart;
+  final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) {
-    const color = Colors.black87;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Ink(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.grey.withValues(alpha: 0.20)),
-          color: Colors.white.withValues(alpha: 0.35),
-        ),
-        child: Row(
-          children: [
-            PhosphorIcon(icon, size: 20, color: color),
-            const SizedBox(width: 10),
+    return WorkoutDetailActionIsland(
+      onSecondaryTap: onTrends,
+      secondaryChild: MynauiIcon(
+        MynauiGlyphs.courseUp,
+        size: 23,
+        color: Colors.black.withValues(alpha: 0.74),
+      ),
+      onPrimaryTap: allowStart ? onStart : onEdit,
+      primaryLabel: allowStart ? 'Start' : 'Edit',
+      primaryLeading:
+          allowStart
+              ? MynauiIcon(
+                MynauiGlyphs.stopwatchPlay,
+                size: 20,
+                color: Colors.white.withValues(alpha: 0.96),
+              )
+              : MynauiIcon(
+                MynauiGlyphs.editOne,
+                size: 20,
+                color: Colors.white.withValues(alpha: 0.96),
+              ),
+      primaryWidth: allowStart ? 168 : 148,
+    );
+  }
+}
+
+class _WorkoutTemplateSummary extends StatelessWidget {
+  const _WorkoutTemplateSummary({
+    required this.exerciseCount,
+    required this.totalSetCount,
+    required this.totalRestLabel,
+    required this.focusTags,
+  });
+
+  final int exerciseCount;
+  final int totalSetCount;
+  final String totalRestLabel;
+  final List<String> focusTags;
+
+  @override
+  Widget build(BuildContext context) {
+    return SectionBoundary(
+      borderRadius: kIosCornerRadius,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _SummaryStatCell(
+                  label: 'Exercises',
+                  value: '$exerciseCount',
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _SummaryStatCell(label: 'Sets', value: '$totalSetCount'),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _SummaryStatCell(label: 'Rest', value: totalRestLabel),
+              ),
+            ],
+          ),
+          if (focusTags.isNotEmpty) ...[
+            const SizedBox(height: 10),
             Text(
-              label,
+              'MUSCLES WORKED',
               style: TextStyle(
-                color: color,
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5,
+                color: Colors.grey.shade700,
               ),
             ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children:
+                  focusTags
+                      .take(5)
+                      .map(
+                        (tag) => Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: kAccentColor.withValues(alpha: 0.10),
+                            borderRadius: kIosChipBorderRadius,
+                            border: Border.all(
+                              color: kAccentColor.withValues(alpha: 0.18),
+                            ),
+                          ),
+                          child: Text(
+                            tag.toUpperCase(),
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: kAccentColor,
+                            ),
+                          ),
+                        ),
+                      )
+                      .toList(),
+            ),
           ],
-        ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SummaryStatCell extends StatelessWidget {
+  const _SummaryStatCell({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        borderRadius: kIosControlBorderRadius,
+        color: Colors.grey.shade50,
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.4,
+              color: Colors.grey.shade600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+          ),
+        ],
       ),
     );
   }
 }
 
 class _HeroWorkoutCard extends StatelessWidget {
-  const _HeroWorkoutCard({
-    required this.template,
-    required this.durationLabel,
-    required this.exercisesLabel,
-  });
+  const _HeroWorkoutCard({required this.template, required this.durationLabel});
 
   final WorkoutTemplate template;
   final String durationLabel;
-  final String exercisesLabel;
 
   @override
   Widget build(BuildContext context) {
     return SectionBoundary(
+      borderRadius: kIosCornerRadius,
       padding: EdgeInsets.zero,
-      child: AspectRatio(
-        aspectRatio: 1.12,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(16),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              Image.network(
-                template.imageUrl,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(kIosCornerRadius),
+        child: Stack(
+          children: [
+            AspectRatio(
+              aspectRatio: 1.45,
+              child: WorkoutTemplateHeroImage(
+                imageUrl: template.imageUrl,
                 fit: BoxFit.cover,
-                alignment: Alignment.center,
-                errorBuilder: (_, __, ___) {
-                  return Container(
-                    color: Colors.grey.shade200,
-                    child: Icon(
-                      Icons.image_outlined,
-                      color: Colors.grey.shade500,
-                      size: 58,
-                    ),
-                  );
-                },
-              ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(14, 24, 14, 12),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.black.withValues(alpha: 0.0),
-                        Colors.black.withValues(alpha: 0.28),
-                        Colors.black.withValues(alpha: 0.46),
-                      ],
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          template.name.toUpperCase(),
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 19,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.2,
-                          ),
-                        ),
+                errorBuilder:
+                    (_, __, ___) => Container(
+                      color: Colors.grey.shade200,
+                      alignment: Alignment.center,
+                      child: MynauiIcon(
+                        MynauiGlyphs.galleryMinimalistic,
+                        color: Colors.grey.shade500,
+                        size: 40,
                       ),
-                      _HeroPill(label: durationLabel),
-                      const SizedBox(width: 8),
-                      _HeroPill(label: exercisesLabel),
+                    ),
+              ),
+            ),
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0),
+                      Colors.black.withValues(alpha: 0.42),
                     ],
                   ),
                 ),
               ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _HeroPill extends StatelessWidget {
-  const _HeroPill({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.20)),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
+            ),
+            Positioned(
+              left: 14,
+              right: 14,
+              bottom: 14,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: Text(
+                      template.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.20),
+                      borderRadius: kIosChipBorderRadius,
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.25),
+                      ),
+                    ),
+                    child: Text(
+                      durationLabel.toUpperCase(),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -560,355 +652,254 @@ class _ExercisePreviewCard extends StatelessWidget {
   const _ExercisePreviewCard({
     required this.exercise,
     required this.restFormatter,
-    required this.weightFormatter,
     required this.isExpanded,
     required this.onToggle,
+    required this.onOpenDetails,
     this.footer,
   });
 
   final WorkoutTemplateExercise exercise;
-  final String Function(int seconds) restFormatter;
-  final String Function(double weightKg) weightFormatter;
   final bool isExpanded;
   final VoidCallback onToggle;
+  final VoidCallback onOpenDetails;
+  final String Function(int seconds) restFormatter;
   final Widget? footer;
 
   @override
   Widget build(BuildContext context) {
     return SectionBoundary(
+      borderRadius: kIosCornerRadius,
       child: Column(
         children: [
           Row(
             children: [
-              Container(
-                width: 62,
-                height: 62,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  color: Colors.grey.shade100,
-                  border: Border.all(color: Colors.grey.shade200),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(11),
-                  child: Image.network(
-                    _kExercisePlaceholderImageUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder:
-                        (_, __, ___) => Icon(
-                          Icons.image_outlined,
-                          color: Colors.grey.shade500,
+              Expanded(
+                child: InkWell(
+                  onTap: onOpenDetails,
+                  borderRadius: kIosControlBorderRadius,
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Row(
+                      children: [
+                        _ExerciseThumbnail(name: exercise.name),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                exercise.name,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              _DurationChip(label: '${exercise.setCount} sets'),
+                            ],
+                          ),
                         ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      exercise.name.toUpperCase(),
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.2,
+              InkWell(
+                onTap: onToggle,
+                borderRadius: kIosControlBorderRadius,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(6, 8, 6, 8),
+                  child: Row(
+                    children: [
+                      _DurationChip(label: '${exercise.estimatedMinutes} mins'),
+                      const SizedBox(width: 6),
+                      Icon(
+                        isExpanded
+                            ? Icons.keyboard_arrow_up_rounded
+                            : Icons.keyboard_arrow_down_rounded,
+                        size: 28,
+                        color: Colors.grey.shade700,
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    _SetPill(label: '${exercise.presetRows.length} sets'),
-                  ],
-                ),
-              ),
-              IconButton(
-                onPressed: onToggle,
-                icon: Icon(
-                  isExpanded
-                      ? Icons.keyboard_arrow_up_rounded
-                      : Icons.keyboard_arrow_down_rounded,
-                  size: 30,
-                  color: Colors.grey.shade700,
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
           if (isExpanded) ...[
-            const SizedBox(height: 12),
-            Row(
-              children: const [
-                Expanded(
-                  child: Text(
-                    'SETS',
-                    style: _ColumnLabelStyle(),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-                Expanded(
-                  child: Text(
-                    'REPS',
-                    style: _ColumnLabelStyle(),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-                Expanded(
-                  child: Text(
-                    'WEIGHT',
-                    style: _ColumnLabelStyle(),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-                Expanded(
-                  child: Text(
-                    'REST',
-                    style: _ColumnLabelStyle(),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            ...exercise.presetRows.map(
-              (row) => Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.grey.shade300),
-                  color: Colors.white,
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        row.label.toUpperCase(),
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 19,
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: Text(
-                        '${row.reps}',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 17,
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: Text(
-                        weightFormatter(row.weightKg),
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 17,
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: Text(
-                        restFormatter(row.restSeconds),
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 17,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-          if (isExpanded && footer != null) ...[
             const SizedBox(height: 8),
-            footer!,
+            _SetPresetTable(
+              rows: exercise.presetRows,
+              restFormatter: restFormatter,
+            ),
           ],
+          if (footer != null) ...[const SizedBox(height: 8), footer!],
         ],
       ),
     );
   }
 }
 
-class _ColumnLabelStyle extends TextStyle {
-  const _ColumnLabelStyle()
-    : super(
-        fontSize: 12,
-        color: Colors.grey,
-        fontWeight: FontWeight.w700,
-        letterSpacing: 0.35,
-      );
-}
+class _ExerciseThumbnail extends StatelessWidget {
+  const _ExerciseThumbnail({required this.name});
 
-class _SetPill extends StatelessWidget {
-  const _SetPill({required this.label});
-
-  final String label;
+  final String name;
+  static const double _kSize = 56;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+      width: _kSize,
+      height: _kSize,
       decoration: BoxDecoration(
-        color: kAccentColor.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: kExerciseImageBorderRadius,
+        border: Border.all(color: Colors.grey.shade200),
+        color: Colors.grey.shade100,
       ),
-      child: Text(
-        label.toUpperCase(),
-        style: const TextStyle(
-          color: kAccentColor,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
+      child: ClipRRect(
+        borderRadius: BorderRadius.all(
+          Radius.circular(kExerciseImageRadius - 1),
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Image.network(
+              exerciseDemoImageUrl(name),
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder:
+                  (_, __, ___) => Container(
+                    color: Colors.grey.shade100,
+                    alignment: Alignment.center,
+                    child: Icon(
+                      Icons.fitness_center,
+                      color: Colors.grey.shade500,
+                      size: _kSize * 0.38,
+                    ),
+                  ),
+            ),
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.00),
+                      Colors.black.withValues(alpha: 0.10),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-class _WorkoutTrendsScreen extends StatelessWidget {
-  const _WorkoutTrendsScreen({
-    required this.workoutName,
-    required this.entries,
-  });
+class _DurationChip extends StatelessWidget {
+  const _DurationChip({required this.label});
 
-  final String workoutName;
-  final List<WorkoutHistoryEntry> entries;
-
-  String _formatDuration(Duration value) {
-    final minutes = value.inMinutes;
-    final seconds = (value.inSeconds % 60).toString().padLeft(2, '0');
-    return '${minutes}m $seconds';
-  }
-
-  String _formatDate(DateTime value) {
-    final day = value.day.toString().padLeft(2, '0');
-    final month = value.month.toString().padLeft(2, '0');
-    return '$day/$month/${value.year}';
-  }
+  final String label;
 
   @override
   Widget build(BuildContext context) {
-    final totalVolume = entries.fold<double>(
-      0,
-      (sum, entry) => sum + entry.totalVolumeKg,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151618).withValues(alpha: 0.92),
+        borderRadius: kIosChipBorderRadius,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Text(
+        label.toUpperCase(),
+        style: const TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: Colors.white,
+        ),
+      ),
     );
-    final totalDuration = entries.fold<Duration>(
-      Duration.zero,
-      (sum, entry) => sum + entry.duration,
-    );
-    final avgDuration =
-        entries.isEmpty
-            ? Duration.zero
-            : Duration(seconds: totalDuration.inSeconds ~/ entries.length);
-    final avgVolume = entries.isEmpty ? 0.0 : totalVolume / entries.length;
-    final prs = entries.fold<int>(0, (sum, entry) => sum + entry.prsAchieved);
+  }
+}
 
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-          child: Column(
-            children: [
-              Row(
+class _SetPresetTable extends StatelessWidget {
+  const _SetPresetTable({required this.rows, required this.restFormatter});
+
+  final List<WorkoutTemplateSetRow> rows;
+  final String Function(int seconds) restFormatter;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Row(
+          children: [
+            _TableHeaderCell('SETS'),
+            _TableHeaderCell('REPS'),
+            _TableHeaderCell('WEIGHT'),
+            _TableHeaderCell('REST'),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ...rows.map(
+          (row) => Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+              decoration: BoxDecoration(
+                borderRadius: kIosControlBorderRadius,
+                border: Border.all(color: Colors.grey.shade200),
+                color: Colors.white,
+              ),
+              child: Row(
                 children: [
-                  IconButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                  _TableValueCell(row.label),
+                  _TableValueCell('${row.reps}'),
+                  _TableValueCell(
+                    row.weightKg <= 0
+                        ? '--'
+                        : '${row.weightKg.toStringAsFixed(0)}KG',
                   ),
-                  Expanded(
-                    child: Text(
-                      '$workoutName Trends',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 21,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
+                  _TableValueCell(
+                    row.restSeconds <= 0
+                        ? '--'
+                        : restFormatter(row.restSeconds),
                   ),
-                  const SizedBox(width: 44),
                 ],
               ),
-              const SizedBox(height: 8),
-              SectionBoundary(
-                child: Row(
-                  children: [
-                    _TrendMetric(label: 'Sessions', value: '${entries.length}'),
-                    _TrendMetric(
-                      label: 'Avg duration',
-                      value: _formatDuration(avgDuration),
-                    ),
-                    _TrendMetric(
-                      label: 'Avg volume',
-                      value:
-                          avgVolume == avgVolume.roundToDouble()
-                              ? '${avgVolume.round()}kg'
-                              : '${avgVolume.toStringAsFixed(1)}kg',
-                    ),
-                    _TrendMetric(label: 'PRs', value: '$prs'),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              Expanded(
-                child:
-                    entries.isEmpty
-                        ? SectionBoundary(
-                          child: Center(
-                            child: Text(
-                              'No previous sessions yet for this workout.',
-                              style: TextStyle(
-                                color: Colors.grey.shade700,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        )
-                        : ListView.separated(
-                          itemCount: entries.length,
-                          separatorBuilder:
-                              (_, __) => const SizedBox(height: 10),
-                          itemBuilder: (context, index) {
-                            final entry = entries[index];
-                            return SectionBoundary(
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      _formatDate(entry.completedAt),
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 15,
-                                      ),
-                                    ),
-                                  ),
-                                  Text(
-                                    _formatDuration(entry.duration),
-                                    style: TextStyle(
-                                      color: Colors.grey.shade700,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Text(
-                                    '${entry.totalVolumeKg.round()}kg',
-                                    style: const TextStyle(
-                                      color: kAccentColor,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-              ),
-            ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TableHeaderCell extends StatelessWidget {
+  const _TableHeaderCell(this.label);
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: Colors.grey.shade700,
           ),
         ),
       ),
@@ -916,44 +907,17 @@ class _WorkoutTrendsScreen extends StatelessWidget {
   }
 }
 
-class _TrendMetric extends StatelessWidget {
-  const _TrendMetric({required this.label, required this.value});
-
-  final String label;
+class _TableValueCell extends StatelessWidget {
+  const _TableValueCell(this.value);
   final String value;
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 3),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.grey.shade200),
-          color: Colors.grey.shade50,
-        ),
-        child: Column(
-          children: [
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: Colors.grey.shade600,
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
-            ),
-          ],
-        ),
+      child: Text(
+        value,
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
       ),
     );
   }
@@ -973,6 +937,7 @@ class _WorkoutReviewScreenState extends State<_WorkoutReviewScreen> {
   late List<WorkoutTemplateExercise> _exercises;
   final Set<String> _expandedExerciseIds = <String>{};
   late final Map<String, TextEditingController> _weightControllers;
+  final ScrollController _reviewScrollController = ScrollController();
 
   static const List<String> _swapOptions = [
     'Leg Press',
@@ -1024,6 +989,7 @@ class _WorkoutReviewScreenState extends State<_WorkoutReviewScreen> {
 
   @override
   void dispose() {
+    _reviewScrollController.dispose();
     for (final controller in _weightControllers.values) {
       controller.dispose();
     }
@@ -1034,13 +1000,20 @@ class _WorkoutReviewScreenState extends State<_WorkoutReviewScreen> {
     final selected = await showModalBottomSheet<String>(
       context: context,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(kIosCornerRadius),
+        ),
       ),
       builder: (context) {
         return SafeArea(
           top: false,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            padding: const EdgeInsets.fromLTRB(
+              kPagePadding,
+              12,
+              kPagePadding,
+              16,
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1060,7 +1033,11 @@ class _WorkoutReviewScreenState extends State<_WorkoutReviewScreen> {
                     title: Text(option),
                     trailing:
                         option == exercise.name
-                            ? const Icon(Icons.check, color: kAccentColor)
+                            ? MynauiIcon(
+                              MynauiGlyphs.checkUnread,
+                              size: 22,
+                              color: kAccentColor,
+                            )
                             : null,
                     onTap: () => Navigator.pop(context, option),
                   ),
@@ -1104,25 +1081,27 @@ class _WorkoutReviewScreenState extends State<_WorkoutReviewScreen> {
       backgroundColor: Colors.white,
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          padding: const EdgeInsets.fromLTRB(
+            kPagePadding,
+            10,
+            kPagePadding,
+            16,
+          ),
           child: Column(
             children: [
               LiftIslandHeader(
                 title: 'REVIEW WORKOUT',
+                scrollController: _reviewScrollController,
                 leading: LiftIslandHeaderAction(
                   onTap: () => Navigator.of(context).pop(),
-                  child: const Icon(
-                    Icons.arrow_back_ios_new_rounded,
-                    color: Colors.white,
-                    size: 22,
-                  ),
+                  child: _alignedWorkoutBackIcon(),
                 ),
                 trailing: LiftIslandHeaderAction(
                   onTap: _handleSave,
                   child: const Text(
                     'DONE',
                     style: TextStyle(
-                      color: Colors.white,
+                      color: kAccentColor,
                       fontSize: 12,
                       fontWeight: FontWeight.w800,
                     ),
@@ -1132,6 +1111,8 @@ class _WorkoutReviewScreenState extends State<_WorkoutReviewScreen> {
               const SizedBox(height: 8),
               Expanded(
                 child: ReorderableListView.builder(
+                  scrollController: _reviewScrollController,
+                  primary: false,
                   padding: EdgeInsets.zero,
                   shrinkWrap: true,
                   physics: const AlwaysScrollableScrollPhysics(),
@@ -1140,7 +1121,7 @@ class _WorkoutReviewScreenState extends State<_WorkoutReviewScreen> {
                   proxyDecorator: (child, index, animation) {
                     return Material(
                       elevation: 12,
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(kIosCornerRadius),
                       child: child,
                     );
                   },
@@ -1159,6 +1140,8 @@ class _WorkoutReviewScreenState extends State<_WorkoutReviewScreen> {
                         child: _ExercisePreviewCard(
                           exercise: exercise,
                           isExpanded: isExpanded,
+                          onOpenDetails:
+                              () => _openExerciseDetail(context, exercise),
                           onToggle: () {
                             setState(() {
                               if (isExpanded) {
@@ -1175,12 +1158,6 @@ class _WorkoutReviewScreenState extends State<_WorkoutReviewScreen> {
                               '0',
                             );
                             return '$minutes:$rem';
-                          },
-                          weightFormatter: (weight) {
-                            if (weight == weight.roundToDouble()) {
-                              return '${weight.round()}KG';
-                            }
-                            return '${weight.toStringAsFixed(1)}KG';
                           },
                           footer: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,

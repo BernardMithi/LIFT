@@ -14,12 +14,22 @@ pluginManagement {
         mavenCentral()
         gradlePluginPortal()
     }
+
+    // Ensure Flutter plugin subprojects use Kotlin Gradle Plugin 2.1+ (matches Flutter tooling;
+    // avoids KGP 1.8.x which breaks plugins using kotlin { compilerOptions { ... } }).
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id == "org.jetbrains.kotlin.android") {
+                useVersion("2.2.10")
+            }
+        }
+    }
 }
 
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
-    id("com.android.application") version "8.7.0" apply false
-    id("org.jetbrains.kotlin.android") version "1.8.22" apply false
+    id("com.android.application") version "8.9.1" apply false
+    id("org.jetbrains.kotlin.android") version "2.2.10" apply false
 }
 
 include(":app")

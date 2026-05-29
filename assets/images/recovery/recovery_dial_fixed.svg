@@ -1,0 +1,33 @@
+<svg width="640" height="360" viewBox="0 0 640 360" xmlns="http://www.w3.org/2000/svg">
+  <!-- flatter fixed speedometer track -->
+  <path
+    d="M84 286 A236 150 0 0 1 556 286"
+    fill="none"
+    stroke="#F7F7F7"
+    stroke-width="58"
+    stroke-linecap="round"
+  />
+
+  <!-- fixed color zones: RED -> YELLOW -> GREEN -->
+  <path
+    d="M92 286 A228 142 0 0 1 224 132"
+    fill="none"
+    stroke="#EB3A36"
+    stroke-width="48"
+    stroke-linecap="round"
+  />
+  <path
+    d="M242 122 A228 142 0 0 1 398 122"
+    fill="none"
+    stroke="#F4B400"
+    stroke-width="48"
+    stroke-linecap="round"
+  />
+  <path
+    d="M416 132 A228 142 0 0 1 548 286"
+    fill="none"
+    stroke="#41A447"
+    stroke-width="48"
+    stroke-linecap="round"
+  />
+</svg>

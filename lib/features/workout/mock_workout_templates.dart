@@ -9,7 +9,7 @@ class MockWorkoutTemplates {
         imageUrl:
             'https://images.pexels.com/photos/949130/pexels-photo-949130.jpeg',
         durationMinutes: 85,
-        focusTags: ['Quads', 'Hamstrings', 'Glutes'],
+        focusTags: ['Quads', 'Hamstrings', 'Glutes', 'Calves'],
         exercises: [
           WorkoutTemplateExercise(
             id: 'ham_curls',
@@ -60,6 +60,32 @@ class MockWorkoutTemplates {
                 reps: 10,
                 weightKg: 140,
                 restSeconds: 180,
+              ),
+            ],
+          ),
+          WorkoutTemplateExercise(
+            id: 'standing_calf_raise',
+            name: 'Standing Calf Raise',
+            setCount: 3,
+            estimatedMinutes: 10,
+            presetRows: [
+              WorkoutTemplateSetRow(
+                label: 'W',
+                reps: 18,
+                weightKg: 30,
+                restSeconds: 75,
+              ),
+              WorkoutTemplateSetRow(
+                label: '1',
+                reps: 15,
+                weightKg: 55,
+                restSeconds: 90,
+              ),
+              WorkoutTemplateSetRow(
+                label: '2',
+                reps: 15,
+                weightKg: 55,
+                restSeconds: 90,
               ),
             ],
           ),
@@ -121,7 +147,7 @@ class MockWorkoutTemplates {
         imageUrl:
             'https://images.pexels.com/photos/18060190/pexels-photo-18060190.jpeg',
         durationMinutes: 45,
-        focusTags: ['Back', 'Biceps'],
+        focusTags: ['Back', 'Biceps', 'Forearms'],
         exercises: [
           WorkoutTemplateExercise(
             id: 'lat_pulldown',
@@ -160,6 +186,32 @@ class MockWorkoutTemplates {
                 reps: 10,
                 weightKg: 60,
                 restSeconds: 150,
+              ),
+            ],
+          ),
+          WorkoutTemplateExercise(
+            id: 'wrist_curl',
+            name: 'Wrist Curl',
+            setCount: 3,
+            estimatedMinutes: 10,
+            presetRows: [
+              WorkoutTemplateSetRow(
+                label: 'W',
+                reps: 18,
+                weightKg: 8,
+                restSeconds: 75,
+              ),
+              WorkoutTemplateSetRow(
+                label: '1',
+                reps: 15,
+                weightKg: 12,
+                restSeconds: 90,
+              ),
+              WorkoutTemplateSetRow(
+                label: '2',
+                reps: 15,
+                weightKg: 12,
+                restSeconds: 90,
               ),
             ],
           ),
@@ -204,6 +256,62 @@ class MockWorkoutTemplates {
                 reps: 1,
                 weightKg: 0,
                 restSeconds: 0,
+              ),
+            ],
+          ),
+        ],
+      ),
+      WorkoutTemplate(
+        id: 'template_upper_body',
+        name: 'Upper Body',
+        imageUrl:
+            'https://images.pexels.com/photos/17840/pexels-photo-17840.jpeg',
+        durationMinutes: 52,
+        focusTags: ['Chest', 'Back', 'Shoulders'],
+        exercises: [
+          WorkoutTemplateExercise(
+            id: 'db_press',
+            name: 'Dumbbell Bench Press',
+            setCount: 3,
+            estimatedMinutes: 18,
+            presetRows: [
+              WorkoutTemplateSetRow(
+                label: 'W',
+                reps: 12,
+                weightKg: 22,
+                restSeconds: 90,
+              ),
+              WorkoutTemplateSetRow(
+                label: '1',
+                reps: 10,
+                weightKg: 26,
+                restSeconds: 90,
+              ),
+              WorkoutTemplateSetRow(
+                label: '2',
+                reps: 8,
+                weightKg: 28,
+                restSeconds: 90,
+              ),
+            ],
+          ),
+          WorkoutTemplateExercise(
+            id: 'lat_pulldown',
+            name: 'Lat Pulldown',
+            setCount: 3,
+            estimatedMinutes: 16,
+            presetRows: [
+              WorkoutTemplateSetRow(
+                label: '1',
+                reps: 12,
+                weightKg: 45,
+                restSeconds: 90,
+              ),
+              WorkoutTemplateSetRow(
+                label: '2',
+                reps: 10,
+                weightKg: 50,
+                restSeconds: 90,
               ),
             ],
           ),

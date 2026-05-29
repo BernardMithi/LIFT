@@ -1,11 +1,16 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:file_selector/file_selector.dart';
+import 'package:file_selector/file_selector.dart' as fs;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lift/app/theme.dart';
 import 'package:lift/features/articles/widgets/article_body_view.dart';
 import 'package:lift/features/articles/widgets/article_embed_view.dart';
+import 'package:lift/features/articles/widgets/article_image_view.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:lift/shared/models/article.dart';
 import 'package:lift/shared/icons/mynaui_glyphs.dart';
 import 'package:lift/shared/icons/mynaui_icon.dart';
@@ -13,8 +18,10 @@ import 'package:lift/shared/widgets/lift_dialogs.dart';
 import 'package:lift/shared/widgets/lift_island_header.dart';
 import 'package:lift/shared/widgets/lift_menu_sheet.dart';
 import 'package:lift/shared/widgets/surfaces.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-const XTypeGroup _kImportTextTypeGroup = XTypeGroup(
+const fs.XTypeGroup _kImportTextTypeGroup = fs.XTypeGroup(
   label: 'Text documents',
   extensions: <String>['txt', 'md'],
 );
@@ -103,6 +110,8 @@ class ArticleEditorScreen extends StatefulWidget {
 }
 
 class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
+  static const String _editorDraftStoragePrefix =
+      'lift_article_editor_draft_v1';
   late final TextEditingController _titleController;
   late final TextEditingController _summaryController;
   late final TextEditingController _contentController;
@@ -115,6 +124,7 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
   final ScrollController _editorScrollController = ScrollController();
   late ArticleStatus _status;
   _EditorSurfaceTab _editorTab = _EditorSurfaceTab.write;
+  Timer? _autosaveDebounce;
 
   @override
   void initState() {
@@ -139,13 +149,105 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
     _titleController.addListener(_handleEditorChange);
     _summaryController.addListener(_handleEditorChange);
     _contentController.addListener(_handleEditorChange);
+    _imageController.addListener(_handleEditorChange);
+    _tagsController.addListener(_handleEditorChange);
+    _musclesController.addListener(_handleEditorChange);
+    _categoriesController.addListener(_handleEditorChange);
+    _machinesController.addListener(_handleEditorChange);
+    _restoreDraft();
   }
 
   String _join(List<String>? items) => items == null ? '' : items.join(', ');
 
   void _handleEditorChange() {
     if (!mounted) return;
+    _scheduleDraftSave();
     setState(() {});
+  }
+
+  String get _draftStorageKey {
+    final articleId = widget.initialArticle?.id ?? 'new';
+    return '$_editorDraftStoragePrefix:$articleId';
+  }
+
+  Future<void> _restoreDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_draftStorageKey);
+      if (raw == null || raw.trim().isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      final draft = decoded.map(
+        (key, value) => MapEntry(key.toString(), value),
+      );
+      final draftSavedAt = DateTime.tryParse(
+        (draft['savedAt'] as String?) ?? '',
+      );
+      final articleUpdatedAt = widget.initialArticle?.updatedAt;
+      if (draftSavedAt != null &&
+          articleUpdatedAt != null &&
+          !draftSavedAt.isAfter(articleUpdatedAt)) {
+        return;
+      }
+
+      void restoreText(TextEditingController controller, String key) {
+        final value = draft[key];
+        if (value is String) controller.text = value;
+      }
+
+      restoreText(_titleController, 'title');
+      restoreText(_summaryController, 'summary');
+      restoreText(_contentController, 'content');
+      restoreText(_imageController, 'imageUrl');
+      restoreText(_tagsController, 'tags');
+      restoreText(_musclesController, 'muscles');
+      restoreText(_categoriesController, 'categories');
+      restoreText(_machinesController, 'machines');
+
+      final statusRaw = draft['status'];
+      if (statusRaw is String && statusRaw.trim().isNotEmpty) {
+        _status = ArticleStatusX.fromWire(statusRaw);
+      }
+      if (!mounted) return;
+      setState(() {});
+    } catch (_) {
+      // Ignore malformed local draft data.
+    }
+  }
+
+  void _scheduleDraftSave() {
+    _autosaveDebounce?.cancel();
+    _autosaveDebounce = Timer(const Duration(milliseconds: 280), _persistDraft);
+  }
+
+  Future<void> _persistDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final payload = <String, String>{
+        'title': _titleController.text,
+        'summary': _summaryController.text,
+        'content': _contentController.text,
+        'imageUrl': _imageController.text,
+        'tags': _tagsController.text,
+        'muscles': _musclesController.text,
+        'categories': _categoriesController.text,
+        'machines': _machinesController.text,
+        'status': _status.wireValue,
+        'savedAt': DateTime.now().toIso8601String(),
+      };
+      await prefs.setString(_draftStorageKey, jsonEncode(payload));
+    } catch (_) {
+      // Non-fatal draft persistence failure.
+    }
+  }
+
+  Future<void> _clearDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_draftStorageKey);
+    } catch (_) {
+      // Non-fatal draft cleanup failure.
+    }
   }
 
   List<String> _parseCsv(String raw) {
@@ -193,6 +295,8 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
       );
       return;
     }
+    _autosaveDebounce?.cancel();
+    unawaited(_clearDraft());
     Navigator.of(context).pop(
       ArticleInput(
         title: title,
@@ -307,8 +411,8 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
 
   Future<void> _importFromDocument() async {
     Navigator.of(context).pop();
-    final file = await openFile(
-      acceptedTypeGroups: <XTypeGroup>[_kImportTextTypeGroup],
+    final file = await fs.openFile(
+      acceptedTypeGroups: <fs.XTypeGroup>[_kImportTextTypeGroup],
     );
     if (file == null || !mounted) return;
     try {
@@ -502,26 +606,99 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
     );
   }
 
-  bool _isValidHttpsImageUrl(String raw) {
-    final uri = Uri.tryParse(raw.trim());
-    if (uri == null || !uri.hasScheme) return false;
-    if (uri.scheme != 'http' && uri.scheme != 'https') return false;
-    return uri.host.isNotEmpty;
+  String? _normalizeImageReference(String raw) {
+    return normalizeArticleImageReference(raw);
   }
 
-  void _insertImageUrl(String raw) {
-    final url = raw.trim();
-    if (!_isValidHttpsImageUrl(url)) {
+  String _sanitizeImageStem(String rawName) {
+    final dotIndex = rawName.lastIndexOf('.');
+    final baseName = dotIndex <= 0 ? rawName : rawName.substring(0, dotIndex);
+    final sanitized = baseName
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return sanitized.isEmpty ? 'article_image' : sanitized;
+  }
+
+  String _safeImageExtension(String rawName) {
+    final dotIndex = rawName.lastIndexOf('.');
+    if (dotIndex == -1 || dotIndex == rawName.length - 1) {
+      return '.jpg';
+    }
+    final extension = rawName.substring(dotIndex).toLowerCase();
+    if (!RegExp(r'^\.[a-z0-9]{1,5}$').hasMatch(extension)) {
+      return '.jpg';
+    }
+    return extension;
+  }
+
+  Future<String?> _copyPickedImageToArticleStorage(XFile pickedFile) async {
+    final sourceFile = File(pickedFile.path);
+    if (!await sourceFile.exists()) return null;
+
+    final appDir = await getApplicationSupportDirectory();
+    final imageDir = Directory('${appDir.path}/article_images');
+    await imageDir.create(recursive: true);
+
+    final extension = _safeImageExtension(pickedFile.name);
+    final stem = _sanitizeImageStem(pickedFile.name);
+    final targetPath =
+        '${imageDir.path}/${DateTime.now().microsecondsSinceEpoch}_$stem$extension';
+
+    await sourceFile.copy(targetPath);
+    return targetPath;
+  }
+
+  Future<String?> _pickImageFromPhone() async {
+    try {
+      final pickedFile = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 2400,
+        imageQuality: 92,
+      );
+      if (pickedFile == null) return null;
+      final storedPath = await _copyPickedImageToArticleStorage(pickedFile);
+      if (storedPath == null) {
+        throw StateError('Unable to store image');
+      }
+      return storedPath;
+    } catch (_) {
+      if (!mounted) return null;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Enter a valid image URL (http or https).'),
+          content: Text(
+            'Could not open your photo library. Check photo access and try again.',
+          ),
+        ),
+      );
+      return null;
+    }
+  }
+
+  void _insertImageReference(String raw) {
+    final imageRef = _normalizeImageReference(raw);
+    if (imageRef == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Enter a valid image URL or choose an image from your phone.',
+          ),
         ),
       );
       return;
     }
-    _insertBlock('!image $url');
+    _insertBlock('!image $imageRef');
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Image added to the article body.')),
+    );
+  }
+
+  Future<void> _pickHeaderImageFromPhone() async {
+    final imageRef = await _pickImageFromPhone();
+    if (!mounted || imageRef == null) return;
+    _imageController.text = imageRef;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Header image selected from your phone.')),
     );
   }
 
@@ -550,14 +727,21 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
           builder: (sheetContext, setSheetState) {
             void submit() {
               final raw = controller.text.trim();
-              if (!_isValidHttpsImageUrl(raw)) {
+              if (_normalizeImageReference(raw) == null) {
                 setSheetState(() {
-                  errorText = 'Use a full image URL (https://…).';
+                  errorText = 'Use a full image URL or choose from your phone.';
                 });
                 return;
               }
               Navigator.of(sheetContext).pop();
-              _insertImageUrl(raw);
+              _insertImageReference(raw);
+            }
+
+            Future<void> chooseFromPhone() async {
+              Navigator.of(sheetContext).pop();
+              final imageRef = await _pickImageFromPhone();
+              if (!mounted || imageRef == null) return;
+              _insertImageReference(imageRef);
             }
 
             return SafeArea(
@@ -566,7 +750,7 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
               child: LiftMenuSheet(
                 title: 'Insert image',
                 subtitle:
-                    'Paste a direct link to an image file (JPEG, PNG, WebP, GIF). '
+                    'Paste a direct image link or choose a photo from your phone. '
                     'It appears full-width in the article and preview.',
                 children: [
                   TextField(
@@ -589,6 +773,19 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
                     ],
                   ),
                   const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: chooseFromPhone,
+                      icon: const MynauiIcon(
+                        MynauiGlyphs.galleryMinimalistic,
+                        size: 18,
+                        color: Colors.white,
+                      ),
+                      label: const Text('Choose from phone'),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
                   Row(
                     children: [
                       Expanded(
@@ -605,8 +802,12 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
                       Expanded(
                         child: FilledButton.icon(
                           onPressed: submit,
-                          icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
-                          label: const Text('Insert image'),
+                          icon: const MynauiIcon(
+                            MynauiGlyphs.galleryMinimalistic,
+                            size: 18,
+                            color: Colors.white,
+                          ),
+                          label: const Text('Use link'),
                         ),
                       ),
                     ],
@@ -782,9 +983,16 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
 
   @override
   void dispose() {
+    _autosaveDebounce?.cancel();
+    unawaited(_persistDraft());
     _titleController.removeListener(_handleEditorChange);
     _summaryController.removeListener(_handleEditorChange);
     _contentController.removeListener(_handleEditorChange);
+    _imageController.removeListener(_handleEditorChange);
+    _tagsController.removeListener(_handleEditorChange);
+    _musclesController.removeListener(_handleEditorChange);
+    _categoriesController.removeListener(_handleEditorChange);
+    _machinesController.removeListener(_handleEditorChange);
     _titleController.dispose();
     _summaryController.dispose();
     _contentController.dispose();
@@ -891,59 +1099,74 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
       runSpacing: 6,
       children: [
         _EditorToolChip(
-          icon: Icons.import_export_rounded,
+          iconBuilder:
+              (accent) => Icon(Icons.import_export_rounded, color: accent),
           label: 'Import',
           onTap: _showImportSheet,
         ),
         _EditorToolChip(
-          icon: Icons.view_quilt_rounded,
+          iconBuilder:
+              (accent) => Icon(Icons.view_quilt_rounded, color: accent),
           label: 'Template',
           onTap: _showStructureSheet,
         ),
         _EditorToolChip(
-          icon: Icons.short_text_rounded,
+          iconBuilder:
+              (accent) => Icon(Icons.short_text_rounded, color: accent),
           label: 'Use intro for summary',
           onTap: _fillSummaryFromIntro,
         ),
         _EditorToolChip(
-          icon: Icons.title_rounded,
+          iconBuilder: (accent) => Icon(Icons.title_rounded, color: accent),
           label: 'H1',
           onTap: () => _insertBlock('# Heading'),
         ),
         _EditorToolChip(
-          icon: Icons.subtitles_rounded,
+          iconBuilder:
+              (accent) => Icon(Icons.subtitles_rounded, color: accent),
           label: 'H2',
           onTap: () => _insertBlock('## Section title'),
         ),
         _EditorToolChip(
-          icon: Icons.format_list_bulleted_rounded,
+          iconBuilder:
+              (accent) =>
+                  Icon(Icons.format_list_bulleted_rounded, color: accent),
           label: 'Bullets',
           onTap: () => _insertBlock('- Point one\n- Point two\n- Point three'),
         ),
         _EditorToolChip(
-          icon: Icons.format_list_numbered_rounded,
+          iconBuilder:
+              (accent) =>
+                  Icon(Icons.format_list_numbered_rounded, color: accent),
           label: 'Steps',
           onTap:
               () =>
                   _insertBlock('1. First step\n2. Second step\n3. Third step'),
         ),
         _EditorToolChip(
-          icon: Icons.format_quote_rounded,
+          iconBuilder:
+              (accent) => Icon(Icons.format_quote_rounded, color: accent),
           label: 'Quote',
           onTap: () => _insertBlock('> Add a key takeaway or coach note here.'),
         ),
         _EditorToolChip(
-          icon: Icons.ondemand_video_rounded,
+          iconBuilder:
+              (accent) => Icon(Icons.ondemand_video_rounded, color: accent),
           label: 'Embed',
           onTap: _showEmbedSheet,
         ),
         _EditorToolChip(
-          icon: Icons.image_outlined,
+          iconBuilder:
+              (accent) => MynauiIcon(
+                MynauiGlyphs.galleryMinimalistic,
+                size: 15,
+                color: accent,
+              ),
           label: 'Image',
           onTap: _showImageSheet,
         ),
         _EditorToolChip(
-          icon: Icons.link_rounded,
+          iconBuilder: (accent) => Icon(Icons.link_rounded, color: accent),
           label: 'Link',
           onTap:
               () => _wrapSelection(
@@ -953,12 +1176,18 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
               ),
         ),
         _EditorToolChip(
-          icon: Icons.horizontal_rule_rounded,
+          iconBuilder:
+              (accent) => Icon(Icons.horizontal_rule_rounded, color: accent),
           label: 'Divider',
           onTap: () => _insertBlock('---'),
         ),
         _EditorToolChip(
-          icon: Icons.clear_rounded,
+          iconBuilder:
+              (accent) => MynauiIcon(
+                MynauiGlyphs.closeCircle,
+                size: 15,
+                color: accent,
+              ),
           label: 'Clear body',
           destructive: true,
           onTap: _clearContent,
@@ -1108,7 +1337,10 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          Divider(color: Colors.grey.shade300, height: 1),
+                          Divider(
+                            color: Theme.of(context).dividerTheme.color,
+                            height: 1,
+                          ),
                           const SizedBox(height: 10),
                           ArticleBodyView(content: _contentController.text),
                         ],
@@ -1141,10 +1373,23 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
           ),
           const SizedBox(height: 10),
           _labeledField(
-            label: 'Header image URL',
+            label: 'Header image',
             controller: _imageController,
-            hint: 'https://example.com/image.jpg',
+            hint: 'Paste a URL or choose from your phone',
           ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: _pickHeaderImageFromPhone,
+              icon: const MynauiIcon(
+                MynauiGlyphs.galleryMinimalistic,
+                size: 18,
+                color: Color(0xFF374151),
+              ),
+              label: const Text('Choose header image from phone'),
+            ),
+          ),
+          const SizedBox(height: 10),
           _labeledField(
             label: 'Tags',
             controller: _tagsController,
@@ -1182,7 +1427,7 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
                   suggestedMachines
                       .map(
                         (machineId) => ActionChip(
-                          label: Text(machineId),
+                          label: Text(machineId.toUpperCase()),
                           onPressed:
                               () => _appendCsvValue(
                                 _machinesController,
@@ -1242,6 +1487,7 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
             onSelectionChanged: (next) {
               if (next.isEmpty) return;
               setState(() => _status = next.first);
+              _scheduleDraftSave();
             },
           ),
         ],
@@ -1288,31 +1534,31 @@ class _ArticleEditorScreenState extends State<ArticleEditorScreen> {
             left: kPagePadding,
             right: kPagePadding,
             child: LiftIslandHeader(
-                scrollController: _editorScrollController,
-                title: _editorTitle,
-                leading: LiftIslandHeaderAction(
-                  onTap: () => Navigator.of(context).pop(),
+              scrollController: _editorScrollController,
+              title: _editorTitle,
+              leading: LiftIslandHeaderAction(
+                onTap: () => Navigator.of(context).pop(),
+                child: const MynauiIcon(
+                  MynauiGlyphs.altArrowLeft,
+                  color: kLiftIslandOnFrosted,
+                  size: 22,
+                ),
+              ),
+              trailing: LiftIslandHeaderAction(
+                onTap: _canSave ? _submit : null,
+                child: Opacity(
+                  opacity: _canSave ? 1.0 : 0.35,
                   child: const MynauiIcon(
-                    MynauiGlyphs.altArrowLeft,
+                    MynauiGlyphs.checkCircle,
                     color: kLiftIslandOnFrosted,
                     size: 22,
                   ),
                 ),
-                trailing: LiftIslandHeaderAction(
-                  onTap: _canSave ? _submit : null,
-                  child: Opacity(
-                    opacity: _canSave ? 1.0 : 0.35,
-                    child: const MynauiIcon(
-                      MynauiGlyphs.checkCircle,
-                      color: kLiftIslandOnFrosted,
-                      size: 22,
-                    ),
-                  ),
-                ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1336,7 +1582,7 @@ class _EditorStatChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            label,
+            label.toUpperCase(),
             style: TextStyle(
               fontSize: 11,
               color: Colors.grey.shade600,
@@ -1345,7 +1591,7 @@ class _EditorStatChip extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           Text(
-            value,
+            value.toUpperCase(),
             style: const TextStyle(
               fontSize: 12,
               color: Color(0xFF111827),
@@ -1360,13 +1606,13 @@ class _EditorStatChip extends StatelessWidget {
 
 class _EditorToolChip extends StatelessWidget {
   const _EditorToolChip({
-    required this.icon,
+    required this.iconBuilder,
     required this.label,
     required this.onTap,
     this.destructive = false,
   });
 
-  final IconData icon;
+  final Widget Function(Color accent) iconBuilder;
   final String label;
   final VoidCallback onTap;
   final bool destructive;
@@ -1389,10 +1635,17 @@ class _EditorToolChip extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 15, color: accent),
+              SizedBox(
+                width: 15,
+                height: 15,
+                child: FittedBox(
+                  fit: BoxFit.contain,
+                  child: iconBuilder(accent),
+                ),
+              ),
               const SizedBox(width: 5),
               Text(
-                label,
+                label.toUpperCase(),
                 style: TextStyle(
                   color: accent,
                   fontSize: 11.5,
@@ -1422,7 +1675,7 @@ class _EmbedExampleChip extends StatelessWidget {
         border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
       ),
       child: Text(
-        label,
+        label.toUpperCase(),
         style: const TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w500,

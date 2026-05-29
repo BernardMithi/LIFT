@@ -1,0 +1,11 @@
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" id="Documents--Streamline-Solar-Broken" height="24" width="24">
+  <desc>
+    Documents Streamline Icon: https://streamlinehq.com
+  </desc>
+  <path d="M19 16c0 2.8284 0 4.2426 -0.8787 5.1213C17.2426 22 15.8284 22 13 22h-2c-2.82843 0 -4.24264 0 -5.12132 -0.8787C5 20.2426 5 18.8284 5 16v-4m0 -4c0 -2.82843 0 -4.24264 0.87868 -5.12132C6.75736 2 8.17157 2 11 2h2c2.8284 0 4.2426 0 5.1213 0.87868C19 3.75736 19 5.17157 19 8v4" stroke="#000000" stroke-linecap="round" stroke-width="1.5"></path>
+  <path d="M5 4.07617c-0.97509 0.09591 -1.63143 0.31268 -2.12132 0.80256C2 5.75741 2 7.17163 2 10.0001v4c0 2.8284 0 4.2426 0.87868 5.1213 0.48989 0.4899 1.14623 0.7066 2.12132 0.8025" stroke="#000000" stroke-width="1.5"></path>
+  <path d="M19 4.07617c0.9751 0.09591 1.6314 0.31268 2.1213 0.80256C22 5.75741 22 7.17163 22 10.0001v4c0 2.8284 0 4.2426 -0.8787 5.1213 -0.4899 0.4899 -1.1462 0.7066 -2.1213 0.8025" stroke="#000000" stroke-width="1.5"></path>
+  <path d="M9 13h6" stroke="#000000" stroke-linecap="round" stroke-width="1.5"></path>
+  <path d="M9 9h6" stroke="#000000" stroke-linecap="round" stroke-width="1.5"></path>
+  <path d="M9 17h3" stroke="#000000" stroke-linecap="round" stroke-width="1.5"></path>
+</svg>
